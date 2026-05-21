@@ -8,6 +8,7 @@
         "copyMagnetLink": "复制磁力链接",
         "copied": "已复制！",
         "quickDownload": "快速下载",
+        "playMagnet": "在线播放磁力",
         "opening": "打开中...",
         "previewContent": "预览磁力内容"
       },
@@ -36,6 +37,8 @@
       "messages": {
         "downloadStarted": "下载启动成功！",
         "downloadFailed": "启动下载失败：{error}",
+        "playStarted": "已打开在线播放页面。",
+        "playFailed": "打开在线播放失败：{error}",
         "copyFailed": "复制失败，请手动选择磁力链接复制。"
       }
     }

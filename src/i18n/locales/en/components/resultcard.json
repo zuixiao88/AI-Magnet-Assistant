@@ -8,6 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
+        "playMagnet": "Play magnet online",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -36,6 +37,8 @@
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
+        "playStarted": "Online playback page opened.",
+        "playFailed": "Failed to open online playback: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }

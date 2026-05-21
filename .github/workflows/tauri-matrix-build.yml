@@ -14,9 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 固定 runner 版本，避免官方镜像迁移提示与潜在不兼容
-        # macos-26 is the Apple Silicon runner used for macOS builds.
-        os: [windows-2022, macos-26]
+        # Build Windows only; Linux/macOS packages are intentionally omitted.
+        os: [windows-2022]
 
     steps:
       - name: Checkout

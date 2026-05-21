@@ -68,6 +68,7 @@
             :is-priority="result.isPriority"
             :file-list="result.file_list"
             :source-url="result.source_url"
+            :preview-image-url="result.preview_image_url"
             @add-to-favorites="addToFavorites"
             @show-notification="handleNotification"
           />
@@ -163,11 +164,13 @@ async function sortResults(resultsArray: any[]) {
   }
 
   // Add priority flag to each result
-  resultsArray.forEach((result: any) => {
+  const sortedResults = [...resultsArray];
+
+  sortedResults.forEach((result: any) => {
     result.isPriority = priorityKeywords.some((pk: any) => {
       const keyword = pk.keyword.toLowerCase();
       // Check title
-      if (result.title.toLowerCase().includes(keyword)) {
+      if (String(result.title || '').toLowerCase().includes(keyword)) {
         return true;
       }
       // Check file list
@@ -179,7 +182,7 @@ async function sortResults(resultsArray: any[]) {
   });
 
   // Sort: priority keyword results first, then by selected sort method
-  resultsArray.sort((a: any, b: any) => {
+  sortedResults.sort((a: any, b: any) => {
     // First sort by priority
     if (a.isPriority && !b.isPriority) return -1;
     if (!a.isPriority && b.isPriority) return 1;
@@ -188,24 +191,31 @@ async function sortResults(resultsArray: any[]) {
     if (sortBy.value === 'score') {
       const scoreA = a.analysis?.purity_score || 0;
       const scoreB = b.analysis?.purity_score || 0;
-      return scoreB - scoreA;
+      if (scoreB !== scoreA) return scoreB - scoreA;
     } else if (sortBy.value === 'size') {
       const sizeA = parseSizeToBytes(a.file_size || '0');
       const sizeB = parseSizeToBytes(b.file_size || '0');
-      return sizeB - sizeA;
+      if (sizeB !== sizeA) return sizeB - sizeA;
     }
 
-    return 0;
+    const dateA = Date.parse(a.upload_date || '') || 0;
+    const dateB = Date.parse(b.upload_date || '') || 0;
+    if (dateB !== dateA) return dateB - dateA;
+
+    return String(a.title || '').localeCompare(String(b.title || ''));
   });
+
+  results.value = sortedResults;
 }
 
 function parseSizeToBytes(sizeStr: string): number {
   if (!sizeStr) return 0;
-  const match = sizeStr.match(/^([\d.]+)\s*([KMGT]?B)$/i);
+  const normalized = sizeStr.replace(/,/g, '').trim();
+  const match = normalized.match(/^([\d.]+)\s*([KMGT]i?B|[KMGT]?B)$/i);
   if (!match) return 0;
   
   const value = parseFloat(match[1]);
-  const unit = match[2].toUpperCase();
+  const unit = match[2].toUpperCase().replace('IB', 'B');
   
   const multipliers: { [key: string]: number } = {
     'B': 1,
@@ -228,10 +238,21 @@ function filterResultsByKeyword(resultsArray: any[]) {
     return resultsArray;
   }
 
+  const keywordParts = normalizedKeyword
+    .split(/\s+/)
+    .map((part: string) => part.trim())
+    .filter(Boolean);
+
   const filteredResults = resultsArray.filter((result: any) => {
     const title = String(result.title || '').toLowerCase();
     const originalTitle = String(result.originalTitle || '').toLowerCase();
-    return title.includes(normalizedKeyword) || originalTitle.includes(normalizedKeyword);
+    const fileList = Array.isArray(result.file_list)
+      ? result.file_list.join(' ').toLowerCase()
+      : '';
+    const displayName = String(result.magnet_link || '').toLowerCase();
+    const searchableText = `${title} ${originalTitle} ${fileList} ${displayName}`;
+
+    return keywordParts.every((part: string) => searchableText.includes(part));
   });
 
   if (filteredResults.length === 0 && resultsArray.length > 0) {

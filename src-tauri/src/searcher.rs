@@ -107,6 +107,7 @@ pub struct SearchResult {
     pub upload_date: Option<String>,
     pub file_list: Vec<String>,
     pub source_url: Option<String>,
+    pub preview_image_url: Option<String>,
     pub score: Option<u8>,
     pub tags: Option<Vec<String>>,
 }
@@ -186,6 +187,28 @@ impl SearchProvider for ClmclmProvider {
 }
 
 impl ClmclmProvider {
+    fn normalize_source_url(&self, href: &str) -> String {
+        if href.starts_with("http://") || href.starts_with("https://") {
+            href.to_string()
+        } else if href.starts_with("//") {
+            format!("https:{href}")
+        } else if href.starts_with("/") {
+            format!("{}{}", self.base_url, href)
+        } else {
+            href.to_string()
+        }
+    }
+
+    fn extract_preview_image(&self, element: &scraper::ElementRef) -> Option<String> {
+        let image_selector = Selector::parse("img[src]").ok()?;
+
+        element
+            .select(&image_selector)
+            .filter_map(|image| image.value().attr("src"))
+            .find(|src| is_content_preview_image(src))
+            .map(|src| self.normalize_source_url(src))
+    }
+
     fn parse_results(&self, html: &str) -> Result<Vec<SearchResult>> {
         let document = Html::parse_document(html);
 
@@ -263,6 +286,7 @@ impl ClmclmProvider {
                         upload_date: None, // clmclm.com doesn't provide upload date
                         file_list,
                         source_url,
+                        preview_image_url: self.extract_preview_image(&element),
                         score: None,
                         tags: None,
                     });
@@ -451,6 +475,7 @@ impl GenericProvider {
                         upload_date: item.created_unix.and_then(format_unix_date),
                         file_list: generate_file_list_from_title(&item.name),
                         source_url: None,
+                        preview_image_url: None,
                         score: None,
                         tags: None,
                     }
@@ -467,12 +492,28 @@ impl GenericProvider {
     async fn analyze_html_with_ai(&self, html: &str, llm_client: Arc<dyn LlmClient>) -> Result<Vec<SearchResult>> {
         search_log!(ai, "Phase 1: Extracting basic info from HTML...");
 
+        let mut deterministic_results = self.parse_generic_results(html).unwrap_or_default();
+        if deterministic_results.len() >= 5 {
+            search_log!(
+                success,
+                "Basic parser extracted {} results. Skipping AI extraction to avoid result loss.",
+                deterministic_results.len()
+            );
+            return Ok(deterministic_results);
+        }
+
         // 第一阶段：让AI从HTML中提取所有磁力链接和基础信息
         match self.extract_torrents_from_html_with_ai(html, llm_client.clone()).await {
-            Ok(results) => {
+            Ok(mut results) => {
                 if results.is_empty() {
                     search_log!(warn, "AI extraction found no results. Falling back to basic parsing");
-                    return self.parse_generic_results(html);
+                    return Ok(deterministic_results);
+                }
+
+                if !deterministic_results.is_empty() {
+                    results.append(&mut deterministic_results);
+                    let mut seen_magnets = HashSet::new();
+                    results.retain(|result| seen_magnets.insert(result.magnet_link.clone()));
                 }
 
                 search_log!(ai, "Phase 2: Separating priority results...");
@@ -559,6 +600,7 @@ impl GenericProvider {
                 upload_date: None, // 第一阶段不提取上传日期
                 file_list,
                 source_url,
+                preview_image_url: None,
                 score: None,
                 tags: None,
             });
@@ -582,6 +624,8 @@ impl GenericProvider {
     fn normalize_source_url(&self, href: &str) -> String {
         if href.starts_with("http://") || href.starts_with("https://") {
             href.to_string()
+        } else if href.starts_with("//") {
+            format!("https:{href}")
         } else if href.starts_with("/") {
             // 相对路径，需要从URL模板中提取基础域名
             self.extract_base_url_from_template()
@@ -623,7 +667,7 @@ impl GenericProvider {
         println!("🔍 Parsing generic HTML content...");
 
         // 尝试查找常见的磁力链接模式
-        let magnet_regex = regex::Regex::new(r"magnet:\?xt=urn:btih:[a-fA-F0-9]{40}[^&\s]*")
+        let magnet_regex = regex::Regex::new(r#"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^"'<>\s]*"#)
             .map_err(|e| anyhow!("Invalid regex: {}", e))?;
 
         // 尝试解析表格结构（最常见的种子站点布局）
@@ -720,6 +764,7 @@ impl GenericProvider {
             upload_date,
             file_list,
             source_url,
+            preview_image_url: self.extract_preview_image(row),
             score: None,
             tags: None,
         })
@@ -744,6 +789,7 @@ impl GenericProvider {
                     upload_date: None,
                     file_list,
                     source_url: None,
+                    preview_image_url: None,
                     score: None,
                     tags: None,
                 });
@@ -776,6 +822,16 @@ impl GenericProvider {
         }
 
         None
+    }
+
+    fn extract_preview_image(&self, element: &scraper::ElementRef) -> Option<String> {
+        let image_selector = Selector::parse("img[src]").ok()?;
+
+        element
+            .select(&image_selector)
+            .filter_map(|image| image.value().attr("src"))
+            .find(|src| is_content_preview_image(src))
+            .map(|src| self.normalize_source_url(src))
     }
 
     /// 判断文本是否是文件大小
@@ -917,6 +973,15 @@ fn format_bytes(bytes: u64) -> String {
 fn format_unix_date(timestamp: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(timestamp, 0)
         .map(|datetime| datetime.date_naive().to_string())
+}
+
+fn is_content_preview_image(src: &str) -> bool {
+    let src_lower = src.to_lowercase();
+    !src_lower.contains("logo")
+        && !src_lower.contains("icon")
+        && !src_lower.contains("sprite")
+        && !src_lower.contains("avatar")
+        && !src_lower.ends_with(".svg")
 }
 
 /// 从标题中提取干净的名称（移除特殊字符和格式信息）

@@ -22,8 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS builds use GitHub's Apple Silicon macos-26 runner.
-        os: [windows-2022, macos-26]
+        # Build Windows only; Linux/macOS packages are intentionally omitted.
+        os: [windows-2022]
 
     steps:
       - name: Checkout

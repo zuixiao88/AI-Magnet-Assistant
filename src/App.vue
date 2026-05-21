@@ -23,7 +23,7 @@ const searchState = ref({
   searchStatus: "",
   isSearching: false,
   useSmartFilter: true,
-  maxPages: 1,
+  maxPages: 3,
   sortBy: 'score',
   titleMustContainKeyword: true,
   showDebugArea: false,
@@ -47,7 +47,7 @@ onMounted(async () => {
     const savedSettings = await invoke('get_search_settings') as any;
     if (savedSettings) {
       searchState.value.useSmartFilter = savedSettings.use_smart_filter ?? true;
-      searchState.value.maxPages = savedSettings.max_pages ?? 1;
+      searchState.value.maxPages = savedSettings.max_pages ?? 3;
       searchState.value.sortBy = savedSettings.sort_by ?? 'score';
       searchState.value.titleMustContainKeyword = savedSettings.title_must_contain_keyword ?? true;
       searchState.value.showDebugArea = savedSettings.show_debug_area ?? false;

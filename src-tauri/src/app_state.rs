@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use uuid::Uuid;
 use crate::i18n::{ErrorCode, translate_error};
 
-const APP_DATA_VERSION: &str = "1.2.1";
+const APP_DATA_VERSION: &str = "1.2.2";
 
 /// 收藏项数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,7 +109,7 @@ impl Default for SearchSettings {
     fn default() -> Self {
         Self {
             use_smart_filter: true,
-            max_pages: 1,
+            max_pages: 3,
             sort_by: "score".to_string(),
             title_must_contain_keyword: true,
             show_debug_area: false,
@@ -217,6 +217,10 @@ fn migrate_app_data(data: &mut AppData) -> bool {
         if !exists {
             data.search_engines.push(default_engine);
         }
+    }
+
+    if data.search_settings.max_pages < 3 {
+        data.search_settings.max_pages = 3;
     }
 
     data.version = APP_DATA_VERSION.to_string();

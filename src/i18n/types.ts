@@ -41,6 +41,7 @@ export interface MessageSchema {
         copyMagnetLink: string
         copied: string
         quickDownload: string
+        playMagnet: string
         opening: string
         previewContent: string
       }
@@ -69,6 +70,8 @@ export interface MessageSchema {
       messages: {
         downloadStarted: string
         downloadFailed: string
+        playStarted: string
+        playFailed: string
         copyFailed: string
       }
     }

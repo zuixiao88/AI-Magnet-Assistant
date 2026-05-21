@@ -677,6 +677,47 @@ async fn open_magnet_link(
     Ok(())
 }
 
+#[tauri::command]
+async fn play_magnet_link(magnet_link: String) -> Result<(), String> {
+    if !magnet_link.starts_with("magnet:?") {
+        return Err("Invalid magnet link.".to_string());
+    }
+
+    let play_url = format!("https://webtor.io/#{}", magnet_link);
+    open_url_with_default_browser(&play_url)?;
+
+    Ok(())
+}
+
+fn open_url_with_default_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {e}"))?;
+        Ok(())
+    }
+}
+
 fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1061,6 +1102,7 @@ fn main() {
             get_download_config,
             update_download_config,
             open_magnet_link,
+            play_magnet_link,
             browse_for_file,
             // 国际化命令
             i18n::get_system_locale,

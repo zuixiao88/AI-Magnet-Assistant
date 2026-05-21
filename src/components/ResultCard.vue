@@ -14,6 +14,7 @@ interface Props {
   isPriority?: boolean;
   fileList?: string[];
   sourceUrl?: string;
+  previewImageUrl?: string;
 }
 
 const props = defineProps<Props>();
@@ -29,9 +30,29 @@ const showFullLink = ref(false);
 const copied = ref(false);
 const quickDownloadEnabled = ref(true);
 const isDownloading = ref(false);
+const isPlaying = ref(false);
 const showContentPreview = ref(false);
+const previewImageFailed = ref(false);
 
 const fileCount = computed(() => props.fileList?.length || 0);
+const previewType = computed(() => {
+  const text = `${props.title || ''} ${(props.fileList || []).join(' ')}`.toLowerCase();
+
+  if (text.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm)\b/) || text.includes('1080p') || text.includes('2160p')) {
+    return { className: 'preview-video', icon: '🎬', label: 'VIDEO' };
+  }
+  if (text.match(/\.(mp3|flac|wav|aac|m4a)\b/)) {
+    return { className: 'preview-audio', icon: '♪', label: 'AUDIO' };
+  }
+  if (text.match(/\.(zip|rar|7z|iso|dmg|exe|msi)\b/)) {
+    return { className: 'preview-archive', icon: '⬡', label: 'FILE' };
+  }
+  if (text.match(/\.(pdf|epub|mobi|txt)\b/)) {
+    return { className: 'preview-doc', icon: '▤', label: 'DOC' };
+  }
+
+  return { className: 'preview-generic', icon: '◇', label: 'BT' };
+});
 const magnetHash = computed(() => {
   if (!props.magnetLink) return '';
 
@@ -68,6 +89,10 @@ function toggleLinkDisplay() {
 
 function toggleContentPreview() {
   showContentPreview.value = !showContentPreview.value;
+}
+
+function handlePreviewImageError() {
+  previewImageFailed.value = true;
 }
 
 function getDisplayLink(link: string | undefined) {
@@ -141,11 +166,39 @@ async function quickDownload(magnetLink: string | undefined) {
   }
 }
 
+async function playMagnet(magnetLink: string | undefined) {
+  if (!magnetLink) return;
+
+  isPlaying.value = true;
+  try {
+    await invoke("play_magnet_link", { magnetLink });
+    emit('showNotification', t('components.resultCard.messages.playStarted'), 'success');
+  } catch (error) {
+    logger.error("Failed to play magnet link:", error);
+    emit('showNotification', t('components.resultCard.messages.playFailed', { error: String(error) }), 'error');
+  } finally {
+    isPlaying.value = false;
+  }
+}
+
 </script>
 
 <template>
   <div class="card">
     <div class="card-header">
+      <div class="preview-thumb" :class="previewType.className">
+        <img
+          v-if="previewImageUrl && !previewImageFailed"
+          :src="previewImageUrl"
+          :alt="title || 'preview'"
+          loading="lazy"
+          @error="handlePreviewImageError"
+        />
+        <template v-else>
+          <span class="preview-thumb-icon">{{ previewType.icon }}</span>
+          <span class="preview-thumb-label">{{ previewType.label }}</span>
+        </template>
+      </div>
       <div class="title-section">
         <div class="title-row">
           <div class="title-wrapper">
@@ -219,6 +272,15 @@ async function quickDownload(magnetLink: string | undefined) {
           :disabled="isDownloading"
         >
           {{ isDownloading ? '⏳' : '⬇️' }}
+        </button>
+        <button
+          @click="playMagnet(magnetLink)"
+          class="play-btn"
+          :class="{ playing: isPlaying }"
+          :title="isPlaying ? $t('components.resultCard.actions.opening') : $t('components.resultCard.actions.playMagnet')"
+          :disabled="isPlaying"
+        >
+          {{ isPlaying ? '⏳' : '▶' }}
         </button>
         <button
           @click="toggleContentPreview"
@@ -313,6 +375,64 @@ async function quickDownload(magnetLink: string | undefined) {
 
 .card-header {
   margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.preview-thumb {
+  width: 72px;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border: 1px solid #d8dee8;
+  flex-shrink: 0;
+}
+
+.preview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.preview-thumb-icon {
+  font-size: 24px;
+  line-height: 1;
+  color: #1f2937;
+}
+
+.preview-thumb-label {
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #4b5563;
+}
+
+.preview-video {
+  background: linear-gradient(135deg, #e8f4ff, #f7fbff);
+}
+
+.preview-audio {
+  background: linear-gradient(135deg, #f0fdf4, #f8fff9);
+}
+
+.preview-archive {
+  background: linear-gradient(135deg, #fff7ed, #fffaf4);
+}
+
+.preview-doc {
+  background: linear-gradient(135deg, #eef2ff, #fafbff);
+}
+
+.preview-generic {
+  background: linear-gradient(135deg, #f8fafc, #ffffff);
 }
 
 .title-section {
@@ -405,7 +525,7 @@ async function quickDownload(magnetLink: string | undefined) {
   flex-shrink: 0;
 }
 
-.action-btn, .favorite-btn, .copy-btn-icon, .preview-btn {
+.action-btn, .favorite-btn, .copy-btn-icon, .preview-btn, .play-btn {
   border: none;
   cursor: pointer;
   transition: all 0.3s ease;
@@ -418,7 +538,7 @@ async function quickDownload(magnetLink: string | undefined) {
   border-radius: 50%;
 }
 
-.action-btn:hover, .favorite-btn:hover, .copy-btn-icon:hover, .preview-btn:hover {
+.action-btn:hover, .favorite-btn:hover, .copy-btn-icon:hover, .preview-btn:hover, .play-btn:hover:not(:disabled) {
   background: #f0f0f0;
 }
 
@@ -465,6 +585,22 @@ async function quickDownload(magnetLink: string | undefined) {
 }
 
 .quick-download-btn.downloading {
+  color: #f39c12;
+  animation: pulse 1.5s infinite;
+}
+
+.play-btn {
+  color: #16a34a;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.play-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.play-btn.playing {
   color: #f39c12;
   animation: pulse 1.5s infinite;
 }
@@ -799,6 +935,10 @@ async function quickDownload(magnetLink: string | undefined) {
 
 @media (max-width: 600px) {
   .card { padding: 8px; }
+  .card-header { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; }
+  .preview-thumb { width: 56px; }
+  .preview-thumb-icon { font-size: 20px; }
+  .preview-thumb-label { font-size: 9px; }
   .title { font-size: 1em; }
   .file-grid { gap: 3px; max-height: 100px; }
   .file-item { padding: 2px 4px; gap: 2px; }
@@ -813,6 +953,8 @@ async function quickDownload(magnetLink: string | undefined) {
 
 @media (max-width: 400px) {
   .card { padding: 6px; }
+  .card-header { grid-template-columns: 48px minmax(0, 1fr); gap: 8px; }
+  .preview-thumb { width: 48px; }
   .title { font-size: 0.9em; }
   .file-grid { gap: 2px; max-height: 80px; }
   .file-item { padding: 1px 3px; gap: 1px; }
