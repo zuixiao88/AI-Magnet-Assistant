@@ -29,6 +29,17 @@ const showFullLink = ref(false);
 const copied = ref(false);
 const quickDownloadEnabled = ref(true);
 const isDownloading = ref(false);
+const showContentPreview = ref(false);
+
+const fileCount = computed(() => props.fileList?.length || 0);
+const magnetHash = computed(() => {
+  if (!props.magnetLink) return '';
+
+  const match = props.magnetLink.match(/btih:([^&]+)/i);
+  return match?.[1] || '';
+});
+const magnetDisplayName = computed(() => getMagnetParam('dn'));
+const trackerCount = computed(() => getMagnetParams('tr').length);
 
 // 计算剩余文件的tooltip内容
 const remainingFilesTooltip = computed(() => {
@@ -37,24 +48,49 @@ const remainingFilesTooltip = computed(() => {
   return remainingFiles.join('\n');
 });
 
-function copyToClipboard(text: string | undefined) {
+async function copyToClipboard(text: string | undefined) {
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
+  try {
+    await navigator.clipboard.writeText(text);
     copied.value = true;
     setTimeout(() => {
       copied.value = false;
     }, 2000);
-  });
+  } catch (error) {
+    logger.error("Failed to copy magnet link:", error);
+    emit('showNotification', t('components.resultCard.messages.copyFailed'), 'error');
+  }
 }
 
 function toggleLinkDisplay() {
   showFullLink.value = !showFullLink.value;
 }
 
+function toggleContentPreview() {
+  showContentPreview.value = !showContentPreview.value;
+}
+
 function getDisplayLink(link: string | undefined) {
   if (!link) return '';
   if (showFullLink.value) return link;
   return link.length > 60 ? link.substring(0, 60) + '...' : link;
+}
+
+function getMagnetParams(name: string): string[] {
+  if (!props.magnetLink) return [];
+
+  try {
+    const query = props.magnetLink.startsWith('magnet:?')
+      ? props.magnetLink.slice('magnet:?'.length)
+      : props.magnetLink;
+    return new URLSearchParams(query).getAll(name).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getMagnetParam(name: string): string {
+  return getMagnetParams(name)[0] || '';
 }
 
 function addToFavorites() {
@@ -184,6 +220,71 @@ async function quickDownload(magnetLink: string | undefined) {
         >
           {{ isDownloading ? '⏳' : '⬇️' }}
         </button>
+        <button
+          @click="toggleContentPreview"
+          class="preview-btn"
+          :class="{ active: showContentPreview }"
+          :title="$t('components.resultCard.actions.previewContent')"
+        >
+          {{ showContentPreview ? '▴' : '☰' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="showContentPreview" class="content-preview">
+      <div class="preview-header">
+        <div>
+          <h4>{{ $t('components.resultCard.preview.title') }}</h4>
+          <p>{{ $t('components.resultCard.preview.subtitle') }}</p>
+        </div>
+        <button
+          @click="toggleContentPreview"
+          class="preview-close-btn"
+          :title="$t('components.resultCard.preview.close')"
+        >
+          ×
+        </button>
+      </div>
+
+      <div class="preview-meta">
+        <div class="preview-meta-item">
+          <span>{{ $t('components.resultCard.preview.fileCount') }}</span>
+          <strong>{{ fileCount }}</strong>
+        </div>
+        <div class="preview-meta-item">
+          <span>{{ $t('components.resultCard.preview.fileSize') }}</span>
+          <strong>{{ fileSize || $t('components.resultCard.preview.unknown') }}</strong>
+        </div>
+        <div class="preview-meta-item preview-hash" v-if="magnetHash">
+          <span>{{ $t('components.resultCard.preview.hash') }}</span>
+          <strong>{{ magnetHash }}</strong>
+        </div>
+        <div class="preview-meta-item" v-if="magnetDisplayName">
+          <span>{{ $t('components.resultCard.preview.displayName') }}</span>
+          <strong>{{ magnetDisplayName }}</strong>
+        </div>
+        <div class="preview-meta-item">
+          <span>{{ $t('components.resultCard.preview.trackers') }}</span>
+          <strong>{{ trackerCount }}</strong>
+        </div>
+      </div>
+
+      <div class="preview-section">
+        <div class="preview-section-title">{{ $t('components.resultCard.preview.magnetLink') }}</div>
+        <code class="preview-magnet">{{ magnetLink }}</code>
+      </div>
+
+      <div class="preview-section">
+        <div class="preview-section-title">{{ $t('components.resultCard.preview.files') }}</div>
+        <div v-if="fileList && fileList.length > 0" class="preview-file-list">
+          <div v-for="(file, index) in fileList" :key="`${file}-${index}`" class="preview-file-row">
+            <span class="preview-file-index">{{ index + 1 }}</span>
+            <span class="preview-file-name">{{ file }}</span>
+          </div>
+        </div>
+        <div v-else class="preview-empty">
+          {{ $t('components.resultCard.preview.noFiles') }}
+        </div>
       </div>
     </div>
   </div>
@@ -304,7 +405,7 @@ async function quickDownload(magnetLink: string | undefined) {
   flex-shrink: 0;
 }
 
-.action-btn, .favorite-btn, .copy-btn-icon {
+.action-btn, .favorite-btn, .copy-btn-icon, .preview-btn {
   border: none;
   cursor: pointer;
   transition: all 0.3s ease;
@@ -317,7 +418,7 @@ async function quickDownload(magnetLink: string | undefined) {
   border-radius: 50%;
 }
 
-.action-btn:hover, .favorite-btn:hover, .copy-btn-icon:hover {
+.action-btn:hover, .favorite-btn:hover, .copy-btn-icon:hover, .preview-btn:hover {
   background: #f0f0f0;
 }
 
@@ -366,6 +467,17 @@ async function quickDownload(magnetLink: string | undefined) {
 .quick-download-btn.downloading {
   color: #f39c12;
   animation: pulse 1.5s infinite;
+}
+
+.preview-btn {
+  color: #475569;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.preview-btn.active {
+  color: #2563eb;
+  background: #e0ecff;
 }
 
 @keyframes pulse {
@@ -515,6 +627,153 @@ async function quickDownload(magnetLink: string | undefined) {
   min-width: 0;
 }
 
+.content-preview {
+  margin-top: 12px;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  background: #fbfdff;
+  overflow: hidden;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #eef5ff;
+  border-bottom: 1px solid #d8e2f0;
+}
+
+.preview-header h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #1e3a5f;
+}
+
+.preview-header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.preview-close-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #64748b;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.preview-close-btn:hover {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.preview-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.preview-meta-item {
+  min-width: 0;
+  padding: 8px 10px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.preview-meta-item span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.preview-meta-item strong {
+  display: block;
+  font-size: 12px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-hash {
+  grid-column: span 1;
+}
+
+.preview-section {
+  padding: 0 14px 12px;
+}
+
+.preview-section-title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.preview-magnet {
+  display: block;
+  max-height: 78px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: #0f172a;
+  color: #dbeafe;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.preview-file-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: white;
+}
+
+.preview-file-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.preview-file-row:last-child {
+  border-bottom: none;
+}
+
+.preview-file-index {
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: right;
+}
+
+.preview-file-name {
+  min-width: 0;
+  color: #334155;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.preview-empty {
+  padding: 12px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .toggle-hint {
   display: block;
   font-size: 11px;
@@ -549,6 +808,7 @@ async function quickDownload(magnetLink: string | undefined) {
   .magnet-link-container { padding: 6px; }
   .magnet-link code { font-size: 10px; }
   .metadata { font-size: 11px; }
+  .preview-meta { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 400px) {

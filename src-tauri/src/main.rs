@@ -658,28 +658,116 @@ async fn open_magnet_link(
 ) -> Result<(), String> {
     let config = app_state::get_download_config(&state);
 
+    if !magnet_link.starts_with("magnet:?") {
+        return Err("Invalid magnet link.".to_string());
+    }
+
     if let Some(ref app_path) = config.custom_app_path {
         // 检查是否是115浏览器
         if app_path.to_lowercase().contains("115chrome") || app_path.to_lowercase().contains("115browser") {
             // 为115浏览器创建临时HTML文件
             create_and_open_magnet_html(&magnet_link, app_path, &config).await?;
         } else {
-            // 对于其他应用程序，直接打开磁力链接
-            tauri_plugin_opener::open_path(&magnet_link, Some(app_path.as_str()))
-                .map_err(|_| "Failed to open with specified application. Please check the application path in settings.".to_string())?;
+            open_magnet_with_app(&magnet_link, app_path)?;
         }
     } else {
-        // 使用系统默认应用打开磁力链接
-        tauri_plugin_opener::open_path(&magnet_link, None::<&str>)
-            .map_err(|_| "No application is configured to handle magnet links. Please configure an application path in settings.".to_string())?;
+        open_magnet_with_default_app(&magnet_link)?;
     }
 
     Ok(())
 }
 
+fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", magnet_link])
+            .spawn()
+            .map_err(|e| format!("Failed to open magnet link with the system default app: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(magnet_link)
+            .spawn()
+            .map_err(|e| format!("Failed to open magnet link with the system default app: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(magnet_link)
+            .spawn()
+            .map_err(|e| format!("Failed to open magnet link with the system default app: {e}"))?;
+        Ok(())
+    }
+}
+
+fn open_magnet_with_app(magnet_link: &str, app_path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::path::Path::new(app_path);
+        let mut command = if app_path.ends_with(".app") || path.is_dir() {
+            let mut command = std::process::Command::new("open");
+            command.arg("-a").arg(app_path).arg(magnet_link);
+            command
+        } else {
+            let mut command = std::process::Command::new(app_path);
+            command.arg(magnet_link);
+            command
+        };
+
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to open magnet link with the selected app: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::process::Command::new(app_path)
+            .arg(magnet_link)
+            .spawn()
+            .map_err(|e| format!("Failed to open magnet link with the selected app: {e}"))?;
+        Ok(())
+    }
+}
+
+fn open_file_with_app(file_path: &std::path::Path, app_path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::path::Path::new(app_path);
+        let mut command = if app_path.ends_with(".app") || path.is_dir() {
+            let mut command = std::process::Command::new("open");
+            command.arg("-a").arg(app_path).arg(file_path);
+            command
+        } else {
+            let mut command = std::process::Command::new(app_path);
+            command.arg(file_path);
+            command
+        };
+
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to open temporary download page: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::process::Command::new(app_path)
+            .arg(file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open temporary download page: {e}"))?;
+        Ok(())
+    }
+}
+
 async fn create_and_open_magnet_html(magnet_link: &str, browser_path: &str, config: &app_state::DownloadConfig) -> Result<(), String> {
     use std::fs;
-    use std::process::Command;
 
     // 创建临时目录
     let temp_dir = std::env::temp_dir();
@@ -820,10 +908,7 @@ async fn create_and_open_magnet_html(magnet_link: &str, browser_path: &str, conf
         .map_err(|e| format!("Failed to create temporary HTML file: {e}"))?;
 
     // 使用115浏览器打开HTML文件
-    let _output = Command::new(browser_path)
-        .arg(html_file.to_string_lossy().as_ref())
-        .spawn()
-        .map_err(|e| format!("Failed to launch 115 browser: {e}"))?;
+    open_file_with_app(&html_file, browser_path)?;
 
     // 等待一下让浏览器启动
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -874,10 +959,31 @@ async fn browse_for_file() -> Result<Option<String>, String> {
         }
     }
 
-    // 对于非Windows系统，返回错误
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("File browser is only supported on Windows".to_string())
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                r#"POSIX path of (choose application with prompt "Select Application")"#,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to open application picker: {e}"))?;
+
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        } else {
+            Err("Application picker was cancelled or failed".to_string())
+        }
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Err("File browser is only supported on Windows and macOS".to_string())
     }
 }
 

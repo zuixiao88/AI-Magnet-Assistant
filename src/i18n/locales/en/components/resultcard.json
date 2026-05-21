@@ -8,7 +8,8 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "opening": "Opening..."
+        "opening": "Opening...",
+        "previewContent": "Preview magnet content"
       },
       "analysis": {
         "score": "Score"
@@ -18,9 +19,24 @@
         "expandHint": "Click to expand",
         "collapseHint": "Click to collapse"
       },
+      "preview": {
+        "title": "Magnet Content Preview",
+        "subtitle": "Check files and magnet details before downloading",
+        "close": "Close preview",
+        "fileCount": "Files",
+        "fileSize": "Size",
+        "hash": "BTIH",
+        "displayName": "Display name",
+        "trackers": "Trackers",
+        "magnetLink": "Magnet link",
+        "files": "File list",
+        "unknown": "Unknown",
+        "noFiles": "No file list is available. Copy the magnet link into your downloader to inspect details."
+      },
       "messages": {
         "downloadStarted": "Download started successfully!",
-        "downloadFailed": "Failed to start download: {error}"
+        "downloadFailed": "Failed to start download: {error}",
+        "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }
   }

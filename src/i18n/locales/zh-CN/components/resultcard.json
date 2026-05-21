@@ -8,7 +8,8 @@
         "copyMagnetLink": "复制磁力链接",
         "copied": "已复制！",
         "quickDownload": "快速下载",
-        "opening": "打开中..."
+        "opening": "打开中...",
+        "previewContent": "预览磁力内容"
       },
       "analysis": {
         "score": "评分"
@@ -18,9 +19,24 @@
         "expandHint": "点击展开",
         "collapseHint": "点击收起"
       },
+      "preview": {
+        "title": "磁力内容预览",
+        "subtitle": "下载前检查文件列表与磁力信息",
+        "close": "关闭预览",
+        "fileCount": "文件数",
+        "fileSize": "大小",
+        "hash": "BTIH",
+        "displayName": "显示名称",
+        "trackers": "Tracker 数",
+        "magnetLink": "磁力链接",
+        "files": "文件列表",
+        "unknown": "未知",
+        "noFiles": "暂无文件列表，可复制磁力链接到下载程序查看详情。"
+      },
       "messages": {
         "downloadStarted": "下载启动成功！",
-        "downloadFailed": "启动下载失败：{error}"
+        "downloadFailed": "启动下载失败：{error}",
+        "copyFailed": "复制失败，请手动选择磁力链接复制。"
       }
     }
   }

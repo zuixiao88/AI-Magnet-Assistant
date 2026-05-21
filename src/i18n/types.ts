@@ -42,6 +42,7 @@ export interface MessageSchema {
         copied: string
         quickDownload: string
         opening: string
+        previewContent: string
       }
       analysis: {
         score: string
@@ -51,9 +52,24 @@ export interface MessageSchema {
         expandHint: string
         collapseHint: string
       }
+      preview: {
+        title: string
+        subtitle: string
+        close: string
+        fileCount: string
+        fileSize: string
+        hash: string
+        displayName: string
+        trackers: string
+        magnetLink: string
+        files: string
+        unknown: string
+        noFiles: string
+      }
       messages: {
         downloadStarted: string
         downloadFailed: string
+        copyFailed: string
       }
     }
   }
@@ -262,6 +278,7 @@ export type TranslationKey =
   | `components.resultCard.actions.${keyof MessageSchema['components']['resultCard']['actions']}`
   | `components.resultCard.analysis.${keyof MessageSchema['components']['resultCard']['analysis']}`
   | `components.resultCard.fileList.${keyof MessageSchema['components']['resultCard']['fileList']}`
+  | `components.resultCard.preview.${keyof MessageSchema['components']['resultCard']['preview']}`
   | `components.resultCard.messages.${keyof MessageSchema['components']['resultCard']['messages']}`
   | `pages.home.${keyof MessageSchema['pages']['home']}`
   | `pages.home.search.${keyof MessageSchema['pages']['home']['search']}`

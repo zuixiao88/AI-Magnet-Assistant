@@ -234,7 +234,7 @@
               v-model="downloadConfig.custom_app_path"
               type="text"
               :placeholder="$t('pages.settings.download.applicationPathPlaceholder')"
-              required />
+            />
             <button type="button" @click="browseForApplication" class="browse-btn">
               {{ $t('pages.settings.download.browse') }}
             </button>

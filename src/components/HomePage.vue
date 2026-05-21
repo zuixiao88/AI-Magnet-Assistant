@@ -218,6 +218,23 @@ function parseSizeToBytes(sizeStr: string): number {
   return value * (multipliers[unit] || 1);
 }
 
+function filterResultsByKeyword(resultsArray: any[]) {
+  if (!titleMustContainKeyword.value) {
+    return resultsArray;
+  }
+
+  const normalizedKeyword = keyword.value.trim().toLowerCase();
+  if (!normalizedKeyword) {
+    return resultsArray;
+  }
+
+  return resultsArray.filter((result: any) => {
+    const title = String(result.title || '').toLowerCase();
+    const originalTitle = String(result.originalTitle || '').toLowerCase();
+    return title.includes(normalizedKeyword) || originalTitle.includes(normalizedKeyword);
+  });
+}
+
 async function onSortChange() {
   await sortResults(results.value);
 }
@@ -287,7 +304,7 @@ async function search() {
 
       // 立即显示clmclm结果
       if (clmclmResults && (clmclmResults as any[]).length > 0) {
-        results.value = clmclmResults as any[];
+        results.value = filterResultsByKeyword(clmclmResults as any[]);
         searchStatus.value = t('pages.home.search.status.foundFromEngine', { 
           count: results.value.length, 
           engine: 'clmclm.com',
@@ -325,7 +342,8 @@ async function search() {
 
       // 合并其他引擎的结果
       if (otherResults && (otherResults as any[]).length > 0) {
-        const allResults = [...results.value, ...(otherResults as any[])];
+        const filteredOtherResults = filterResultsByKeyword(otherResults as any[]);
+        const allResults = [...results.value, ...filteredOtherResults];
         results.value = allResults;
         searchStatus.value = t('pages.home.search.status.completeWithCount', { 
           count: results.value.length,
@@ -336,7 +354,7 @@ async function search() {
         await sortResults(results.value);
 
         // 如果启用了智能过滤，分析新增的结果
-        if (useSmartFilter.value && (otherResults as any[]).length > 0) {
+        if (useSmartFilter.value && filteredOtherResults.length > 0) {
           // 再次检查搜索是否被取消
           if (isSearchCancelled()) {
             logger.debug('Search cancelled before additional analysis');
