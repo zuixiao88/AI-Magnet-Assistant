@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use scraper::{Html, Selector};
 use futures::future::join_all;
 use std::sync::Arc;
+use std::collections::HashSet;
 use crate::llm_service::{LlmClient, GeminiClient, LlmConfig};
 
 // 统一的日志宏
@@ -33,6 +34,44 @@ fn handle_request_error(url: &str, error: reqwest::Error) -> anyhow::Error {
     anyhow!("Request failed: {}", error)
 }
 
+fn is_cloudflare_challenge(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get("cf-mitigated")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("challenge"))
+        .unwrap_or(false)
+}
+
+fn handle_http_status_error(url: &str, response: &reqwest::Response) -> anyhow::Error {
+    let status = response.status();
+    if status.as_u16() == 403 && is_cloudflare_challenge(response) {
+        search_log!(error, "Cloudflare challenge blocked {}", url);
+        anyhow!(
+            "Search source blocked automated requests with Cloudflare challenge (HTTP 403): {}",
+            url
+        )
+    } else {
+        search_log!(error, "HTTP error {} for {}", status, url);
+        anyhow!("HTTP error {}: {}", status, url)
+    }
+}
+
+fn decode_html_entities(text: &str) -> String {
+    text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&#61;", "=")
+        .replace("&#x3D;", "=")
+        .replace("&#38;", "&")
+        .replace("&#x26;", "&")
+        .replace("&nbsp;", " ")
+}
+
 /// 安全截断字符串，避免切到多字节字符中间
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -54,13 +93,7 @@ fn clean_html_text(text: &str) -> String {
     let text = re_tags.replace_all(text, "");
 
     // 解码常见的HTML实体
-    let text = text
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ");
+    let text = decode_html_entities(&text);
 
     // 清理多余的空格
     text.trim().replace("  ", " ")
@@ -76,6 +109,19 @@ pub struct SearchResult {
     pub source_url: Option<String>,
     pub score: Option<u8>,
     pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TorrentsCsvResponse {
+    torrents: Vec<TorrentsCsvItem>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TorrentsCsvItem {
+    infohash: String,
+    name: String,
+    size_bytes: Option<u64>,
+    created_unix: Option<i64>,
 }
 
 /// 搜索引擎提供商特性
@@ -129,8 +175,7 @@ impl SearchProvider for ClmclmProvider {
             .map_err(|e| handle_request_error(&url, e))?;
 
         if !response.status().is_success() {
-            search_log!(error, "HTTP error {} for {}", response.status(), url);
-            return Err(anyhow!("HTTP error {}: {}", response.status(), url));
+            return Err(handle_http_status_error(&url, &response));
         }
 
         let html = response.text().await?;
@@ -293,8 +338,9 @@ impl SearchProvider for GenericProvider {
 
     async fn search(&self, query: &str, page: u32) -> Result<Vec<SearchResult>> {
         // 替换URL模板中的占位符
+        let encoded_query = urlencoding::encode(query);
         let mut url = self.url_template
-            .replace("{keyword}", query);
+            .replace("{keyword}", encoded_query.as_ref());
 
         // Handle different page numbering systems
         if url.contains("{page-1}") {
@@ -329,8 +375,7 @@ impl SearchProvider for GenericProvider {
             .map_err(|e| handle_request_error(&url, e))?;
 
         if !response.status().is_success() {
-            search_log!(error, "HTTP error {} for {}", response.status(), url);
-            return Err(anyhow!("HTTP error: {}", response.status()));
+            return Err(handle_http_status_error(&url, &response));
         }
 
         // 获取响应文本（reqwest自动处理压缩）
@@ -369,8 +414,12 @@ impl SearchProvider for GenericProvider {
             }
         }
 
-        // 对于自定义搜索引擎，使用AI智能识别流程
-        let results = if let Some(llm_client) = &self.llm_client {
+        let trimmed_html = html.trim_start();
+
+        // JSON APIs are deterministic and do not need AI extraction.
+        let results = if trimmed_html.starts_with('{') || trimmed_html.starts_with('[') {
+            self.parse_json_results(&html)?
+        } else if let Some(llm_client) = &self.llm_client {
             self.analyze_html_with_ai(&html, llm_client.clone()).await?
         } else {
             self.parse_generic_results(&html)?
@@ -382,6 +431,38 @@ impl SearchProvider for GenericProvider {
 }
 
 impl GenericProvider {
+    fn parse_json_results(&self, content: &str) -> Result<Vec<SearchResult>> {
+        if let Ok(response) = serde_json::from_str::<TorrentsCsvResponse>(content) {
+            let results = response
+                .torrents
+                .into_iter()
+                .filter(|item| item.infohash.len() == 40)
+                .map(|item| {
+                    let magnet_link = format!(
+                        "magnet:?xt=urn:btih:{}&dn={}",
+                        item.infohash,
+                        urlencoding::encode(&item.name)
+                    );
+
+                    SearchResult {
+                        title: clean_html_text(&item.name),
+                        magnet_link,
+                        file_size: item.size_bytes.map(format_bytes),
+                        upload_date: item.created_unix.and_then(format_unix_date),
+                        file_list: generate_file_list_from_title(&item.name),
+                        source_url: None,
+                        score: None,
+                        tags: None,
+                    }
+                })
+                .collect();
+
+            return Ok(results);
+        }
+
+        Err(anyhow!("Unsupported JSON search response format"))
+    }
+
     /// 使用AI分析整个HTML内容
     async fn analyze_html_with_ai(&self, html: &str, llm_client: Arc<dyn LlmClient>) -> Result<Vec<SearchResult>> {
         search_log!(ai, "Phase 1: Extracting basic info from HTML...");
@@ -537,6 +618,7 @@ impl GenericProvider {
     fn parse_generic_results(&self, html: &str) -> Result<Vec<SearchResult>> {
         let document = Html::parse_document(html);
         let mut results = Vec::new();
+        let decoded_html = decode_html_entities(html);
 
         println!("🔍 Parsing generic HTML content...");
 
@@ -559,7 +641,7 @@ impl GenericProvider {
 
         // 如果表格解析没有结果，尝试通用解析
         if results.is_empty() {
-            results = self.parse_generic_fallback(&document, &magnet_regex)?;
+            results = self.parse_generic_fallback(&decoded_html, &magnet_regex)?;
         }
 
         println!("📊 Extracted {} unique results from generic HTML", results.len());
@@ -569,9 +651,14 @@ impl GenericProvider {
     /// 解析表格行，提取标题、磁力链接和文件大小
     fn parse_table_row(&self, row: &scraper::ElementRef, magnet_regex: &regex::Regex) -> Option<SearchResult> {
         let row_html = row.html();
+        let decoded_row_html = decode_html_entities(&row_html);
 
         // 查找磁力链接
-        let magnet_link = magnet_regex.find(&row_html)?.as_str().to_string();
+        let magnet_link = if let Some(magnet_match) = magnet_regex.find(&decoded_row_html) {
+            magnet_match.as_str().to_string()
+        } else {
+            self.extract_magnet_from_hash_link(row)?
+        };
 
         // 提取单元格
         let cell_selector = Selector::parse("td").ok()?;
@@ -590,12 +677,12 @@ impl GenericProvider {
         for (i, cell) in cells.iter().enumerate() {
             let cell_text = cell.text().collect::<String>().trim().to_string();
 
-            // 第一个单元格通常是标题
-            if i == 0 && title.is_none() {
+            // Most torrent tables put the title in an early cell, but not always the first one.
+            if title.is_none() {
                 if let Ok(link_selector) = Selector::parse("a") {
                     if let Some(link) = cell.select(&link_selector).next() {
                         let link_text = link.text().collect::<String>().trim().to_string();
-                        if !link_text.is_empty() && !link_text.starts_with("magnet:") {
+                        if link_text.len() > 3 && !link_text.starts_with("magnet:") {
                             title = Some(clean_html_text(&link_text));
                             // 提取source_url
                             if let Some(href) = link.value().attr("href") {
@@ -605,7 +692,7 @@ impl GenericProvider {
                     }
                 }
                 // 如果没有链接，使用单元格文本
-                if title.is_none() && !cell_text.is_empty() && cell_text.len() > 5 {
+                if title.is_none() && i <= 2 && !cell_text.is_empty() && cell_text.len() > 5 {
                     title = Some(clean_html_text(&cell_text));
                 }
             }
@@ -639,11 +726,11 @@ impl GenericProvider {
     }
 
     /// 通用回退解析方法
-    fn parse_generic_fallback(&self, document: &Html, magnet_regex: &regex::Regex) -> Result<Vec<SearchResult>> {
+    fn parse_generic_fallback(&self, decoded_html: &str, magnet_regex: &regex::Regex) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
-        let mut seen_magnets = std::collections::HashSet::new();
+        let mut seen_magnets = HashSet::new();
 
-        for magnet_match in magnet_regex.find_iter(&document.html()) {
+        for magnet_match in magnet_regex.find_iter(decoded_html) {
             let magnet_link = magnet_match.as_str();
 
             if seen_magnets.insert(magnet_link.to_string()) {
@@ -664,6 +751,31 @@ impl GenericProvider {
         }
 
         Ok(results)
+    }
+
+    fn extract_magnet_from_hash_link(&self, row: &scraper::ElementRef) -> Option<String> {
+        let link_selector = Selector::parse("a[href]").ok()?;
+        let hash_regex = regex::Regex::new(r"(?i)([a-f0-9]{40})").ok()?;
+
+        for link in row.select(&link_selector) {
+            let href = link.value().attr("href")?;
+            if let Some(capture) = hash_regex.captures(href) {
+                let hash = capture.get(1)?.as_str().to_uppercase();
+                let title = link.text().collect::<String>();
+                let title = clean_html_text(&title);
+
+                if title.is_empty() {
+                    return Some(format!("magnet:?xt=urn:btih:{hash}"));
+                }
+
+                return Some(format!(
+                    "magnet:?xt=urn:btih:{hash}&dn={}",
+                    urlencoding::encode(&title)
+                ));
+            }
+        }
+
+        None
     }
 
     /// 判断文本是否是文件大小
@@ -780,6 +892,31 @@ fn generate_file_list_from_title(title: &str) -> Vec<String> {
     }
 
     file_list
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+
+    let bytes = bytes as f64;
+    if bytes >= TB {
+        format!("{:.2} TB", bytes / TB)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes / KB)
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
+fn format_unix_date(timestamp: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|datetime| datetime.date_naive().to_string())
 }
 
 /// 从标题中提取干净的名称（移除特殊字符和格式信息）
@@ -911,6 +1048,17 @@ impl SearchCore {
                     }
                 }
             }
+        }
+
+        let original_count = all_results.len();
+        let mut seen_magnets = HashSet::new();
+        all_results.retain(|result| seen_magnets.insert(result.magnet_link.clone()));
+
+        if all_results.len() != original_count {
+            println!(
+                "🧹 Removed {} duplicate results",
+                original_count - all_results.len()
+            );
         }
 
         println!("🎯 Total results collected from all providers: {}", all_results.len());
@@ -1059,5 +1207,52 @@ mod tests {
         // Assert
         mock.assert();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_generic_parser_handles_encoded_magnet_links() {
+        let provider = GenericProvider::new(
+            "Bitsearch".to_string(),
+            "https://example.test/search?q={keyword}&page={page}".to_string(),
+        );
+        let html = r#"
+            <html>
+            <body>
+                <a href="magnet:?xt&#x3D;urn:btih:D540FC48EB12F2833163EED6421D449DD8F1CE1F&amp;dn&#x3D;Ubuntu">
+                    Magnet
+                </a>
+            </body>
+            </html>
+        "#;
+
+        let results = provider.parse_generic_results(html).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].magnet_link.starts_with("magnet:?xt=urn:btih:D540FC48EB12F2833163EED6421D449DD8F1CE1F"));
+    }
+
+    #[test]
+    fn test_torrents_csv_json_parser_builds_magnet_links() {
+        let provider = GenericProvider::new(
+            "TorrentsCSV".to_string(),
+            "https://torrents-csv.com/service/search?q={keyword}&size=50".to_string(),
+        );
+        let json = r#"{
+            "torrents": [
+                {
+                    "infohash": "29f629d0586efe2f2327ecd7dbc63797437aacde",
+                    "name": "Ubuntu Test ISO",
+                    "size_bytes": 1112120097,
+                    "created_unix": 1531492876
+                }
+            ]
+        }"#;
+
+        let results = provider.parse_json_results(json).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Ubuntu Test ISO");
+        assert!(results[0].magnet_link.starts_with("magnet:?xt=urn:btih:29f629d0586efe2f2327ecd7dbc63797437aacde"));
+        assert_eq!(results[0].file_size.as_deref(), Some("1.04 GB"));
     }
 }

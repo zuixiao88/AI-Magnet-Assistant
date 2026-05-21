@@ -228,11 +228,25 @@ function filterResultsByKeyword(resultsArray: any[]) {
     return resultsArray;
   }
 
-  return resultsArray.filter((result: any) => {
+  const filteredResults = resultsArray.filter((result: any) => {
     const title = String(result.title || '').toLowerCase();
     const originalTitle = String(result.originalTitle || '').toLowerCase();
     return title.includes(normalizedKeyword) || originalTitle.includes(normalizedKeyword);
   });
+
+  if (filteredResults.length === 0 && resultsArray.length > 0) {
+    logger.debug(
+      `Title keyword filter would hide all ${resultsArray.length} results for "${normalizedKeyword}", showing unfiltered results instead`
+    );
+    return resultsArray;
+  }
+
+  return filteredResults;
+}
+
+function formatSearchError(engine: string, error: unknown) {
+  const message = String(error || 'Unknown error').replace(/^Error:\s*/, '');
+  return `${engine}: ${message}`;
 }
 
 async function onSortChange() {
@@ -260,12 +274,14 @@ async function search() {
 
   isSearching.value = true;
   results.value = [];
+  const searchErrors: string[] = [];
 
   try {
     // Load LLM config and enabled engines to determine if AI will be used
     const llmConfig = await invoke("get_llm_config") as any;
     const engines = await invoke("get_all_engines") as any[];
     const enabledEngines = engines.filter((e: any) => e.is_enabled);
+    const hasOtherEnabledEngines = enabledEngines.some((e: any) => e.name !== "clmclm.com");
 
     // Check if AI will be used for HTML extraction
     const hasCustomEngines = enabledEngines.some((e: any) => e.name !== "clmclm.com");
@@ -327,6 +343,7 @@ async function search() {
       }
     } catch (error) {
       logger.debug('clmclm search failed:', error);
+      searchErrors.push(formatSearchError('clmclm.com', error));
       searchStatus.value = t('pages.home.search.status.engineFailed', { engine: 'clmclm.com', modelInfo });
     }
 
@@ -367,6 +384,9 @@ async function search() {
       }
     } catch (error) {
       logger.debug('Other engines search failed:', error);
+      if (hasOtherEnabledEngines) {
+        searchErrors.push(formatSearchError('Other engines', error));
+      }
     }
 
     // 最终检查搜索是否被取消
@@ -377,6 +397,11 @@ async function search() {
 
     // 最终状态 - 如果没有启用智能过滤或没有进行分析，显示基本搜索完成状态
     if (!useSmartFilter.value || results.value.length === 0) {
+      if (results.value.length === 0 && searchErrors.length > 0) {
+        searchStatus.value = t('pages.home.search.status.failed', { reason: searchErrors.join(' | ') });
+        return;
+      }
+
       searchStatus.value = t('pages.home.search.status.completeWithCount', { 
         count: results.value.length,
         modelInfo 

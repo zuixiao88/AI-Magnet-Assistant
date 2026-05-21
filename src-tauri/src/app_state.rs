@@ -8,6 +8,8 @@ use anyhow::{Result, anyhow};
 use uuid::Uuid;
 use crate::i18n::{ErrorCode, translate_error};
 
+const APP_DATA_VERSION: &str = "1.2.1";
+
 /// 收藏项数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FavoriteItem {
@@ -150,24 +152,75 @@ impl Default for AppData {
     fn default() -> Self {
         Self {
             favorites: Vec::new(),
-            search_engines: vec![
-                // 默认搜索引擎
-                SearchEngine {
-                    id: "default_clmclm".to_string(),
-                    name: "clmclm.com".to_string(),
-                    url_template: "http://clmclm.com/search-{keyword}-1-1-{page}.html".to_string(),
-                    is_enabled: true,
-                    is_deletable: false,
-                }
-            ],
+            search_engines: default_search_engines(),
             priority_keywords: Vec::new(),
             llm_config: LlmConfig::default(),
             search_settings: SearchSettings::default(),
             download_config: DownloadConfig::default(),
             current_locale: "en".to_string(), // 默认英文
-            version: "1.2.0".to_string(),
+            version: APP_DATA_VERSION.to_string(),
         }
     }
+}
+
+fn default_search_engines() -> Vec<SearchEngine> {
+    vec![
+        SearchEngine {
+            id: "default_clmclm".to_string(),
+            name: "clmclm.com".to_string(),
+            url_template: "http://clmclm.com/search-{keyword}-1-1-{page}.html".to_string(),
+            is_enabled: true,
+            is_deletable: false,
+        },
+        SearchEngine {
+            id: "default_nyaa".to_string(),
+            name: "Nyaa.si".to_string(),
+            url_template: "https://nyaa.si/?f=0&c=0_0&q={keyword}&p={page}".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
+        SearchEngine {
+            id: "default_bitsearch".to_string(),
+            name: "Bitsearch".to_string(),
+            url_template: "https://bitsearch.eu/search?q={keyword}&page={page}".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
+        SearchEngine {
+            id: "default_torrents_csv".to_string(),
+            name: "TorrentsCSV".to_string(),
+            url_template: "https://torrents-csv.com/service/search?q={keyword}&size=50".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
+        SearchEngine {
+            id: "default_torrentdownload".to_string(),
+            name: "TorrentDownload".to_string(),
+            url_template: "https://www.torrentdownload.info/search?q={keyword}&p={page}".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
+    ]
+}
+
+fn migrate_app_data(data: &mut AppData) -> bool {
+    if data.version == APP_DATA_VERSION {
+        return false;
+    }
+
+    for default_engine in default_search_engines() {
+        let exists = data
+            .search_engines
+            .iter()
+            .any(|engine| engine.id == default_engine.id || engine.name == default_engine.name);
+
+        if !exists {
+            data.search_engines.push(default_engine);
+        }
+    }
+
+    data.version = APP_DATA_VERSION.to_string();
+    true
 }
 
 /// 应用状态管理器
@@ -203,7 +256,7 @@ impl AppStateManager {
         let content = fs::read_to_string(&self.data_file_path)
             .map_err(|e| anyhow!("Failed to read app data file: {}", e))?;
         
-        let data: AppData = match serde_json::from_str(&content) {
+        let mut data: AppData = match serde_json::from_str(&content) {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("Failed to parse app data, using default: {e}");
@@ -216,6 +269,10 @@ impl AppStateManager {
                 default_data
             }
         };
+
+        if migrate_app_data(&mut data) {
+            self.save_data(&data)?;
+        }
 
         Ok(data)
     }
