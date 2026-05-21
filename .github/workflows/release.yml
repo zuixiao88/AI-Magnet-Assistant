@@ -22,7 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-24.04, macos-14]
+        # macOS builds use GitHub's Apple Silicon macos-26 runner.
+        os: [windows-2022, macos-26]
 
     steps:
       - name: Checkout
@@ -92,7 +93,7 @@ jobs:
         run: |
           SKIP_BUILD=1 bash run/package-win.sh
 
-      - name: Upload artifacts (all platforms)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ai-magnet-assistant-${{ matrix.os }}
@@ -103,9 +104,6 @@ jobs:
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.app
-            src-tauri/target/release/bundle/**/*.AppImage
-            src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/release/bundle/**/*.rpm
 
   publish:
     name: Create GitHub Release (draft)
@@ -135,7 +133,7 @@ jobs:
             zip -r "$zipName" "$app" >/dev/null
           done < <(find . -type d -name "*.app" -print0)
           # then compute checksums for files only (including .zip)
-          find . -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -print0 | \
+          find . -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \) -print0 | \
             xargs -0 sha256sum >> SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -156,8 +154,4 @@ jobs:
             dist/**/*.exe
             dist/**/*.dmg
             dist/**/*.zip
-            dist/**/*.AppImage
-            dist/**/*.deb
-            dist/**/*.rpm
             dist/**/SHA256SUMS.txt
-

@@ -15,7 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         # 固定 runner 版本，避免官方镜像迁移提示与潜在不兼容
-        os: [windows-2022, ubuntu-24.04, macos-14]
+        # macos-26 is the Apple Silicon runner used for macOS builds.
+        os: [windows-2022, macos-26]
 
     steps:
       - name: Checkout
@@ -102,7 +103,7 @@ jobs:
         run: |
           SKIP_BUILD=1 bash run/package-win.sh
 
-      - name: Upload artifacts (all platforms)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ai-magnet-assistant-${{ matrix.os }}
@@ -113,9 +114,6 @@ jobs:
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.app
-            src-tauri/target/release/bundle/**/*.AppImage
-            src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/release/bundle/**/*.rpm
 
       - name: Upload build logs on failure
         if: failure()
@@ -125,4 +123,3 @@ jobs:
           path: |
             target/**/bundle/**/bundle.log
             src-tauri/target/**/bundle/**/bundle.log
-
