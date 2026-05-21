@@ -8,7 +8,7 @@
         "copyMagnetLink": "复制磁力链接",
         "copied": "已复制！",
         "quickDownload": "快速下载",
-        "playMagnet": "在线播放磁力",
+        "playMagnet": "复制并在线播放磁力",
         "opening": "打开中...",
         "previewContent": "预览磁力内容"
       },
@@ -29,6 +29,9 @@
         "hash": "BTIH",
         "displayName": "显示名称",
         "trackers": "Tracker 数",
+        "previewImage": "预览图",
+        "previewImageLoaded": "已从搜索结果来源提取预览图，并整合到磁力文件预览中。",
+        "previewImageFallback": "当前结果没有可用预览图，显示按文件类型生成的预览标识。",
         "magnetLink": "磁力链接",
         "files": "文件列表",
         "unknown": "未知",
@@ -37,7 +40,8 @@
       "messages": {
         "downloadStarted": "下载启动成功！",
         "downloadFailed": "启动下载失败：{error}",
-        "playStarted": "已打开在线播放页面。",
+        "playStarted": "已复制磁力链接并打开在线播放页面。",
+        "playStartedCopyFallback": "在线播放页面已打开，但自动复制失败；播放页仍会通过链接参数加载磁力。",
         "playFailed": "打开在线播放失败：{error}",
         "copyFailed": "复制失败，请手动选择磁力链接复制。"
       }

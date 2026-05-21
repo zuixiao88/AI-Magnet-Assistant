@@ -62,6 +62,9 @@ export interface MessageSchema {
         hash: string
         displayName: string
         trackers: string
+        previewImage: string
+        previewImageLoaded: string
+        previewImageFallback: string
         magnetLink: string
         files: string
         unknown: string
@@ -71,6 +74,7 @@ export interface MessageSchema {
         downloadStarted: string
         downloadFailed: string
         playStarted: string
+        playStartedCopyFallback: string
         playFailed: string
         copyFailed: string
       }

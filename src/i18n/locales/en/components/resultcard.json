@@ -8,7 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "playMagnet": "Play magnet online",
+        "playMagnet": "Copy and play magnet online",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -29,6 +29,9 @@
         "hash": "BTIH",
         "displayName": "Display name",
         "trackers": "Trackers",
+        "previewImage": "Preview image",
+        "previewImageLoaded": "Preview image extracted from the search source and integrated into the magnet file preview.",
+        "previewImageFallback": "No preview image is available for this result, so a file-type preview marker is shown.",
         "magnetLink": "Magnet link",
         "files": "File list",
         "unknown": "Unknown",
@@ -37,7 +40,8 @@
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
-        "playStarted": "Online playback page opened.",
+        "playStarted": "Magnet link copied and online playback page opened.",
+        "playStartedCopyFallback": "Online playback page opened, but automatic copy failed; the playback page will still receive the magnet through the URL.",
         "playFailed": "Failed to open online playback: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }

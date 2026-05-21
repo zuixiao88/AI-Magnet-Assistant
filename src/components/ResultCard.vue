@@ -69,18 +69,26 @@ const remainingFilesTooltip = computed(() => {
   return remainingFiles.join('\n');
 });
 
-async function copyToClipboard(text: string | undefined) {
-  if (!text) return;
+async function copyMagnetToClipboard(text: string | undefined, notifyOnFail = true): Promise<boolean> {
+  if (!text) return false;
   try {
     await navigator.clipboard.writeText(text);
     copied.value = true;
     setTimeout(() => {
       copied.value = false;
     }, 2000);
+    return true;
   } catch (error) {
     logger.error("Failed to copy magnet link:", error);
-    emit('showNotification', t('components.resultCard.messages.copyFailed'), 'error');
+    if (notifyOnFail) {
+      emit('showNotification', t('components.resultCard.messages.copyFailed'), 'error');
+    }
+    return false;
   }
+}
+
+async function copyToClipboard(text: string | undefined) {
+  await copyMagnetToClipboard(text);
 }
 
 function toggleLinkDisplay() {
@@ -171,8 +179,15 @@ async function playMagnet(magnetLink: string | undefined) {
 
   isPlaying.value = true;
   try {
+    const copiedToClipboard = await copyMagnetToClipboard(magnetLink, false);
     await invoke("play_magnet_link", { magnetLink });
-    emit('showNotification', t('components.resultCard.messages.playStarted'), 'success');
+    emit(
+      'showNotification',
+      copiedToClipboard
+        ? t('components.resultCard.messages.playStarted')
+        : t('components.resultCard.messages.playStartedCopyFallback'),
+      copiedToClipboard ? 'success' : 'error'
+    );
   } catch (error) {
     logger.error("Failed to play magnet link:", error);
     emit('showNotification', t('components.resultCard.messages.playFailed', { error: String(error) }), 'error');
@@ -186,19 +201,6 @@ async function playMagnet(magnetLink: string | undefined) {
 <template>
   <div class="card">
     <div class="card-header">
-      <div class="preview-thumb" :class="previewType.className">
-        <img
-          v-if="previewImageUrl && !previewImageFailed"
-          :src="previewImageUrl"
-          :alt="title || 'preview'"
-          loading="lazy"
-          @error="handlePreviewImageError"
-        />
-        <template v-else>
-          <span class="preview-thumb-icon">{{ previewType.icon }}</span>
-          <span class="preview-thumb-label">{{ previewType.label }}</span>
-        </template>
-      </div>
       <div class="title-section">
         <div class="title-row">
           <div class="title-wrapper">
@@ -308,6 +310,28 @@ async function playMagnet(magnetLink: string | undefined) {
         </button>
       </div>
 
+      <div class="preview-media-section">
+        <div class="preview-media-frame" :class="previewType.className">
+          <img
+            v-if="previewImageUrl && !previewImageFailed"
+            :src="previewImageUrl"
+            :alt="title || 'preview'"
+            loading="lazy"
+            @error="handlePreviewImageError"
+          />
+          <template v-else>
+            <span class="preview-thumb-icon">{{ previewType.icon }}</span>
+            <span class="preview-thumb-label">{{ previewType.label }}</span>
+          </template>
+        </div>
+        <div class="preview-media-copy">
+          <div class="preview-section-title">{{ $t('components.resultCard.preview.previewImage') }}</div>
+          <div class="preview-media-caption">
+            {{ previewImageUrl && !previewImageFailed ? $t('components.resultCard.preview.previewImageLoaded') : $t('components.resultCard.preview.previewImageFallback') }}
+          </div>
+        </div>
+      </div>
+
       <div class="preview-meta">
         <div class="preview-meta-item">
           <span>{{ $t('components.resultCard.preview.fileCount') }}</span>
@@ -375,10 +399,44 @@ async function playMagnet(magnetLink: string | undefined) {
 
 .card-header {
   margin-bottom: 10px;
+  display: block;
+}
+
+.preview-media-section {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 132px minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.preview-media-frame {
+  width: 132px;
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border: 1px solid #d8dee8;
+}
+
+.preview-media-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.preview-media-copy {
+  min-width: 0;
+}
+
+.preview-media-caption {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .preview-thumb {
@@ -935,8 +993,10 @@ async function playMagnet(magnetLink: string | undefined) {
 
 @media (max-width: 600px) {
   .card { padding: 8px; }
-  .card-header { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; }
+  .card-header { margin-bottom: 8px; }
   .preview-thumb { width: 56px; }
+  .preview-media-section { grid-template-columns: 1fr; padding: 10px 12px; }
+  .preview-media-frame { width: 100%; }
   .preview-thumb-icon { font-size: 20px; }
   .preview-thumb-label { font-size: 9px; }
   .title { font-size: 1em; }
@@ -953,7 +1013,7 @@ async function playMagnet(magnetLink: string | undefined) {
 
 @media (max-width: 400px) {
   .card { padding: 6px; }
-  .card-header { grid-template-columns: 48px minmax(0, 1fr); gap: 8px; }
+  .card-header { margin-bottom: 6px; }
   .preview-thumb { width: 48px; }
   .title { font-size: 0.9em; }
   .file-grid { gap: 2px; max-height: 80px; }
