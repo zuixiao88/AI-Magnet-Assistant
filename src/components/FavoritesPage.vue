@@ -79,6 +79,7 @@ import { ref, onMounted, inject, watch, Ref } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from '../composables/useI18n';
 import { useConfirmDelete } from '../composables/useConfirmDelete';
+import { logger } from '../utils/logger';
 
 interface FavoriteItem {
   id: string;
@@ -105,7 +106,7 @@ const { confirmDelete, getDeleteIcon, getDeleteButtonClass, getDeleteButtonTitle
       await invoke("remove_from_favorites", { id });
       await loadFavorites(); // 重新加载列表
     } catch (error) {
-      console.error("Failed to remove favorite:", error);
+      logger.error("Failed to remove favorite:", error);
       showNotification(t('pages.favorites.messages.removeFailed', { error: String(error) }), 'error');
     }
   }
@@ -128,7 +129,7 @@ async function loadFavorites() {
     favorites.value = result as FavoriteItem[];
     displayedFavorites.value = favorites.value;
   } catch (error) {
-    console.error("Failed to load favorites:", error);
+    logger.error("Failed to load favorites:", error);
     showNotification(t('pages.favorites.messages.loadFailed', { error: String(error) }), 'error');
   } finally {
     loading.value = false;
@@ -152,7 +153,7 @@ async function copyMagnetLink(magnetLink: string) {
     await navigator.clipboard.writeText(magnetLink);
     showNotification(t('pages.favorites.messages.copied'), 'success');
   } catch (error) {
-    console.error("Failed to copy magnet link:", error);
+    logger.error("Failed to copy magnet link:", error);
     showNotification(t('pages.favorites.messages.copyFailed'), 'error');
   }
 }

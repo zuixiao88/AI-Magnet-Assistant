@@ -3,6 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 /// 智能处理API Base URL，为不同的API服务添加正确的路径
@@ -24,6 +25,37 @@ fn normalize_api_base(api_base: &str) -> String {
     } else {
         // 对于其他URL（包括已经包含路径的自定义代理），保持原样但移除末尾斜杠
         trimmed_base.to_string()
+    }
+}
+
+fn safe_api_url(normalized_base: &str, model: &str) -> String {
+    format!("{normalized_base}/models/{model}:generateContent")
+}
+
+fn compact_error_body(error_body: &str) -> String {
+    const MAX_ERROR_BODY_CHARS: usize = 500;
+
+    let compact = error_body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if compact.chars().count() > MAX_ERROR_BODY_CHARS {
+        format!(
+            "{}...",
+            compact.chars().take(MAX_ERROR_BODY_CHARS).collect::<String>()
+        )
+    } else {
+        compact
+    }
+}
+
+fn api_error_message(status: StatusCode, error_body: &str) -> String {
+    let body = compact_error_body(error_body);
+    if body.is_empty() {
+        format!("API请求失败 (状态码: {status})")
+    } else {
+        format!("API请求失败 (状态码: {status}): {body}")
     }
 }
 
@@ -282,8 +314,12 @@ impl GeminiClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-            println!("❌ API请求失败: {status} - {error_body}");
-            return Err(anyhow::anyhow!("API请求失败: {}", error_body));
+            eprintln!(
+                "API请求失败: {} - {}",
+                status,
+                compact_error_body(&error_body)
+            );
+            return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
         }
 
         let gemini_response = response.json::<GeminiResponse>().await?;
@@ -292,13 +328,11 @@ impl GeminiClient {
                 let cleaned_text = part.text.trim().replace("```json", "").replace("```", "");
                 let result: BatchExtractBasicInfoResult = serde_json::from_str(&cleaned_text)
                     .map_err(|e| {
-                        println!("❌ JSON解析失败: {e}");
-                        println!("📄 原始AI响应: {}", part.text);
-                        println!("🧹 清理后文本: {cleaned_text}");
+                        eprintln!("第一阶段JSON解析失败: {e}");
                         anyhow::anyhow!(
                             "解析第一阶段JSON失败: {}. Raw text: {}",
                             e,
-                            cleaned_text
+                            compact_error_body(&cleaned_text)
                         )
                     })?;
                 return Ok(result);
@@ -470,8 +504,9 @@ impl GeminiClient {
 
         let response = self.client.post(&url).json(&request_body).send().await?;
         if !response.status().is_success() {
+            let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("API请求失败: {}", error_body));
+            return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
         }
 
         let gemini_response = response.json::<GeminiResponse>().await?;
@@ -492,7 +527,7 @@ impl GeminiClient {
                         anyhow::anyhow!(
                             "解析批量分析响应JSON失败: {}. Raw text: {}",
                             e,
-                            cleaned_text
+                            compact_error_body(&cleaned_text)
                         )
                     })?;
 
@@ -525,7 +560,7 @@ pub async fn test_connection(config: &LlmConfig) -> Result<String> {
     );
 
     // 简化调试信息
-    println!("🔧 Testing connection to: {url}");
+    println!("Testing connection to: {}", safe_api_url(&normalized_base, &config.model));
     let request_body = GeminiRequest {
         contents: vec![Content {
             parts: vec![Part {
@@ -542,7 +577,10 @@ pub async fn test_connection(config: &LlmConfig) -> Result<String> {
         Ok("连接成功".to_string())
     } else {
         let error_body = response.text().await.unwrap_or_default();
-        println!("❌ Connection failed (Status: {status}): {error_body}");
+        println!(
+            "Connection failed (Status: {status}): {}",
+            compact_error_body(&error_body)
+        );
 
         // 为常见错误提供更友好的提示
         let error_message = match status.as_u16() {
@@ -554,6 +592,11 @@ pub async fn test_connection(config: &LlmConfig) -> Result<String> {
             _ => format!("API连接失败 (状态码: {status})"),
         };
 
-        Err(anyhow::anyhow!("{}: {}", error_message, error_body))
+        let body = compact_error_body(&error_body);
+        if body.is_empty() {
+            Err(anyhow::anyhow!(error_message))
+        } else {
+            Err(anyhow::anyhow!("{}: {}", error_message, body))
+        }
     }
 }

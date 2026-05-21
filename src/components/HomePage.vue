@@ -92,6 +92,7 @@ import { ref, inject, computed } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import ResultCard from './ResultCard.vue';
 import { useI18n } from '../composables/useI18n';
+import { logger } from '../utils/logger';
 
 const { t } = useI18n();
 
@@ -158,7 +159,7 @@ async function sortResults(resultsArray: any[]) {
   try {
     priorityKeywords = await invoke("get_all_priority_keywords");
   } catch (error) {
-    console.error("Failed to load priority keywords:", error);
+    logger.error("Failed to load priority keywords:", error);
   }
 
   // Add priority flag to each result
@@ -280,7 +281,7 @@ async function search() {
 
       // 检查搜索是否被取消
       if (isSearchCancelled()) {
-        console.log('Search cancelled after clmclm results');
+        logger.debug('Search cancelled after clmclm results');
         return;
       }
 
@@ -299,7 +300,7 @@ async function search() {
         if (useSmartFilter.value && results.value.length > 0) {
           // 再次检查搜索是否被取消
           if (isSearchCancelled()) {
-            console.log('Search cancelled before clmclm analysis');
+            logger.debug('Search cancelled before clmclm analysis');
             return;
           }
           searchStatus.value = t('pages.home.search.status.analyzingWithModel', { modelInfo });
@@ -308,7 +309,7 @@ async function search() {
         }
       }
     } catch (error) {
-      console.log('clmclm search failed:', error);
+      logger.debug('clmclm search failed:', error);
       searchStatus.value = t('pages.home.search.status.engineFailed', { engine: 'clmclm.com', modelInfo });
     }
 
@@ -318,7 +319,7 @@ async function search() {
 
       // 检查搜索是否被取消
       if (isSearchCancelled()) {
-        console.log('Search cancelled after other engines results');
+        logger.debug('Search cancelled after other engines results');
         return;
       }
 
@@ -338,7 +339,7 @@ async function search() {
         if (useSmartFilter.value && (otherResults as any[]).length > 0) {
           // 再次检查搜索是否被取消
           if (isSearchCancelled()) {
-            console.log('Search cancelled before additional analysis');
+            logger.debug('Search cancelled before additional analysis');
             return;
           }
           searchStatus.value = t('pages.home.search.status.analysisPartial', { modelInfo });
@@ -347,12 +348,12 @@ async function search() {
         }
       }
     } catch (error) {
-      console.log('Other engines search failed:', error);
+      logger.debug('Other engines search failed:', error);
     }
 
     // 最终检查搜索是否被取消
     if (isSearchCancelled()) {
-      console.log('Search cancelled before final status');
+      logger.debug('Search cancelled before final status');
       return;
     }
 
@@ -366,7 +367,7 @@ async function search() {
     // 如果启用了智能过滤并且有结果，analyzeResults() 已经设置了包含分析信息的最终状态，不要覆盖它
 
   } catch (error) {
-    console.error("Search failed:", error);
+    logger.error("Search failed:", error);
     searchStatus.value = t('pages.home.search.status.failed', { reason: String(error) });
   } finally {
     // 只有当前搜索才能重置搜索状态
@@ -394,11 +395,11 @@ async function analyzeResults() {
     const alreadyAnalyzedCount = results.value.length - unanalyzedResults.length;
 
     if (unanalyzedResults.length === 0) {
-      console.log(`🔧 [DEBUG] All results already analyzed, skipping analysis`);
+      logger.debug('All results already analyzed, skipping analysis');
       return;
     }
 
-    console.log(`🔧 [DEBUG] Frontend AI analysis: ${unanalyzedResults.length} unanalyzed results (${results.value.length} total, ${alreadyAnalyzedCount} already analyzed), batch_size=${batchSize}, model=${analysisModel}`);
+    logger.debug(`Frontend AI analysis: ${unanalyzedResults.length} unanalyzed results (${results.value.length} total, ${alreadyAnalyzedCount} already analyzed), batch_size=${batchSize}, model=${analysisModel}`);
 
     let completedCount = alreadyAnalyzedCount;
     let hasErrors = false;
@@ -407,7 +408,7 @@ async function analyzeResults() {
     // 使用并行批量分析，所有批次同时发出
     try {
       const totalBatches = Math.ceil(unanalyzedResults.length / batchSize);
-      console.log(`🔧 [DEBUG] Starting ${totalBatches} parallel batches with batch_size=${batchSize}`);
+      logger.debug(`Starting ${totalBatches} parallel batches with batch_size=${batchSize}`);
 
       // 创建所有批次的Promise
       const batchPromises = [];
@@ -418,7 +419,7 @@ async function analyzeResults() {
 
         const batchPromise = (async () => {
           try {
-            console.log(`🚀 [DEBUG] Starting batch ${batchIndex + 1}/${totalBatches} with ${batchResults.length} items`);
+            logger.debug(`Starting batch ${batchIndex + 1}/${totalBatches} with ${batchResults.length} items`);
 
             const analysisResults = await invoke('batch_analyze_resources', {
               results: batchResults
@@ -455,7 +456,7 @@ async function analyzeResults() {
                   };
                   hasErrors = true;
                   errorMessages.push(`Batch ${batchIndex + 1} item ${i + 1} failed: ${errorMsg}`);
-                  console.log(`🔧 [DEBUG] Set error for result "${result.title}": ${errorMsg}`);
+                  logger.debug(`Set error for result "${result.title}": ${errorMsg}`);
                 }
 
                 completedCount++;
@@ -472,14 +473,14 @@ async function analyzeResults() {
                 });
               }
 
-              console.log(`✅ [DEBUG] Batch ${batchIndex + 1}/${totalBatches} completed: ${analysisResults.length} results processed`);
+              logger.debug(`Batch ${batchIndex + 1}/${totalBatches} completed: ${analysisResults.length} results processed`);
               return { success: true, batchIndex: batchIndex + 1, count: analysisResults.length };
             } else {
               // 批量分析返回了非数组结果，视为失败
               throw new Error('Batch analysis returned invalid result format');
             }
           } catch (batchError) {
-            console.error(`Batch ${batchIndex + 1} failed, falling back to individual analysis:`, batchError);
+            logger.error(`Batch ${batchIndex + 1} failed, falling back to individual analysis:`, batchError);
             hasErrors = true;
             errorMessages.push(`Batch ${batchIndex + 1} failed: ${batchError}`);
 
@@ -507,7 +508,7 @@ async function analyzeResults() {
                     analysis = rawAnalysis;
                   }
                 } catch (e) {
-                  console.error('Failed to parse analysis from backend:', e);
+                  logger.error('Failed to parse analysis from backend:', e);
                   analysis = { error: `Failed to parse analysis: ${e}` };
                 }
 
@@ -518,7 +519,7 @@ async function analyzeResults() {
                   }
                   result.title = analysis.title;
                 } else if (analysis && analysis.error) {
-                  console.log(`🔧 [DEBUG] Set parse error for result "${result.title}": ${analysis.error}`);
+                  logger.debug(`Set parse error for result "${result.title}": ${analysis.error}`);
                 }
 
                 completedCount++;
@@ -532,7 +533,7 @@ async function analyzeResults() {
                 });
 
               } catch (e) {
-                console.error(`Failed to analyze result: ${result.title}`, e);
+                logger.error(`Failed to analyze result: ${result.title}`, e);
                 const errorMsg = `Analysis Failed: ${e}`;
                 result.analysis = {
                   error: errorMsg,
@@ -544,7 +545,7 @@ async function analyzeResults() {
                 errorMessages.push(`Individual analysis failed for "${result.title}": ${e}`);
                 completedCount++;
 
-                console.log(`🔧 [DEBUG] Set individual error for result "${result.title}": ${errorMsg}`);
+                logger.debug(`Set individual error for result "${result.title}": ${errorMsg}`);
 
                 // 实时更新状态显示错误
                 searchStatus.value = t('pages.home.search.status.individualFallback', { 
@@ -576,9 +577,9 @@ async function analyzeResults() {
       const successfulBatches = batchResults.filter((r: any) => r && r.success).length;
       const failedBatches = batchResults.filter((r: any) => r && !r.success).length;
 
-      console.log(`✅ [DEBUG] All ${totalBatches} parallel batches completed: ${successfulBatches} successful, ${failedBatches} failed, ${completedCount} results processed`);
+      logger.debug(`All ${totalBatches} parallel batches completed: ${successfulBatches} successful, ${failedBatches} failed, ${completedCount} results processed`);
     } catch (e) {
-      console.error('Complete parallel analysis failed:', e);
+      logger.error('Complete parallel analysis failed:', e);
       hasErrors = true;
       errorMessages.push(`Complete analysis failed: ${e}`);
       searchStatus.value = t('pages.home.search.status.failed', { reason: String(e) });
@@ -603,7 +604,7 @@ async function analyzeResults() {
       });
     }
   } catch (error) {
-    console.error('AI analysis failed:', error);
+    logger.error('AI analysis failed:', error);
     searchStatus.value = t('pages.home.search.status.failed', { reason: String(error) });
   }
 }
@@ -619,7 +620,7 @@ async function addToFavorites(result: any) {
     showNotification(t('pages.home.messages.addedToFavorites'), "success");
     favoritesTimestamp.value = Date.now(); // 触发刷新
   } catch (error) {
-    console.error("Failed to add to favorites:", error);
+    logger.error("Failed to add to favorites:", error);
     showNotification(t('pages.home.messages.failedToAddFavorites', { error: String(error) }), "error");
   }
 }

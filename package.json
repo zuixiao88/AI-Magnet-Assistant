@@ -7,7 +7,10 @@
   "scripts": {
     "dev": "tauri dev",
     "vite:dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build",
+    "build:tauri": "tauri build",
+    "check": "npm run typecheck && cargo check --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri"
   },

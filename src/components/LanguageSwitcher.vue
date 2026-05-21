@@ -29,6 +29,7 @@
 import { inject } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useLocale } from '../composables/useI18n';
+import { logger } from '../utils/logger';
 
 // 注入全局通知函数
 const showNotification = inject('showNotification') as (message: string, type?: 'success' | 'error', duration?: number) => void;
@@ -44,7 +45,7 @@ async function switchLanguage(event: Event) {
     await setLocale(newLocale);
     showNotification(t('common.messages.operationSuccess'));
   } catch (error) {
-    console.error('Failed to switch language:', error);
+    logger.error('Failed to switch language:', error);
     showNotification(t('common.messages.operationFailed'), 'error');
   }
 }

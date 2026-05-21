@@ -356,6 +356,7 @@ import { appDataDir } from '@tauri-apps/api/path';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { useI18n } from '../composables/useI18n';
 import LanguageSwitcher from './LanguageSwitcher.vue';
+import { logger } from '../utils/logger';
 
 // 注入全局通知函数
 const showNotification = inject('showNotification') as (message: string, type?: 'success' | 'error', duration?: number) => void;
@@ -450,19 +451,19 @@ async function loadLlmConfig() {
       }
     }
   } catch (error) {
-    console.error("Failed to load LLM config:", error);
+    logger.error("Failed to load LLM config:", error);
   }
 }
 
 async function saveLlmConfig() {
   isSaving.value = true;
   try {
-    console.log("Saving LLM config:", llmConfig.value);
+    logger.debug("Saving LLM config");
     await invoke("update_llm_config", { config: llmConfig.value });
-    console.log("LLM config saved successfully to app_data.json");
+    logger.debug("LLM config saved successfully");
     showNotification(t('pages.settings.messages.settingsSaved'));
   } catch (error) {
-    console.error("Failed to save LLM config:", error); 
+    logger.error("Failed to save LLM config:", error);
     showNotification(t('pages.settings.messages.settingsSaveFailed', { error: String(error) }), 'error');
   } finally {
     isSaving.value = false;
@@ -481,7 +482,7 @@ async function testExtractionConnection() {
     const result = await invoke("test_extraction_connection", { config: llmConfig.value.extraction_config });
     showNotification(t('pages.settings.messages.testConnectionSuccess', { type: t('pages.settings.ai.extraction.title'), result: String(result) }));
   } catch (error) {
-    console.error("Extraction API connection test failed:", error);
+    logger.error("Extraction API connection test failed:", error);
     showNotification(t('pages.settings.messages.testConnectionFailed', { type: t('pages.settings.ai.extraction.title'), error: String(error) }), 'error');
   } finally {
     isTestingExtraction.value = false; 
@@ -500,7 +501,7 @@ async function testAnalysisConnection() {
     const result = await invoke("test_analysis_connection", { config: llmConfig.value.analysis_config });
     showNotification(t('pages.settings.messages.testConnectionSuccess', { type: t('pages.settings.ai.analysis.title'), result: String(result) })); 
   } catch (error) {
-    console.error("Analysis API connection test failed:", error);
+    logger.error("Analysis API connection test failed:", error);
     showNotification(t('pages.settings.messages.testConnectionFailed', { type: t('pages.settings.ai.analysis.title'), error: String(error) }), 'error');
   } finally {
     isTestingAnalysis.value = false;
@@ -529,9 +530,9 @@ async function loadDownloadConfig() {
   try {
     const config = await invoke("get_download_config");
     downloadConfig.value = config as any;
-    console.log("Download config loaded:", config);
+    logger.debug("Download config loaded");
   } catch (error) {
-    console.error("Failed to load download config:", error);
+    logger.error("Failed to load download config:", error);
     showNotification(t('pages.settings.messages.loadDownloadConfigFailed', { error: String(error) }), 'error');
   }
 }
@@ -539,12 +540,12 @@ async function loadDownloadConfig() {
 async function saveDownloadConfig() {
   isSavingDownload.value = true;
   try {
-    console.log("Saving download config:", downloadConfig.value);
+    logger.debug("Saving download config");
     await invoke("update_download_config", { config: downloadConfig.value });
-    console.log("Download config saved successfully");
+    logger.debug("Download config saved successfully");
     showNotification(t('pages.settings.messages.downloadSettingsSaved')); 
   } catch (error) {
-    console.error("Failed to save download config:", error);
+    logger.error("Failed to save download config:", error);
     showNotification(t('pages.settings.messages.downloadSettingsSaveFailed', { error: String(error) }), 'error');    
   } finally {
     isSavingDownload.value = false;
@@ -556,10 +557,10 @@ async function browseForApplication() {
     const result = await invoke("browse_for_file");
     if (result) {
       downloadConfig.value.custom_app_path = result as string;
-      console.log("Selected application path:", result);
+      logger.debug("Selected application path");
     }
   } catch (error) {
-    console.error("Failed to browse for application:", error);
+    logger.error("Failed to browse for application:", error);
     showNotification(t('pages.settings.messages.browseFileFailed', { error: String(error) }), 'error');
   }
 }
@@ -570,7 +571,7 @@ async function openConfigFolder() {
     // 直接打开应用数据目录（com.ai-magnet-assistant.app 文件夹内部）
     await openPath(dir);
   } catch (error) {
-    console.error("Failed to open config folder:", error);
+    logger.error("Failed to open config folder:", error);
     showNotification(t('pages.settings.messages.openFolderFailed', { error: String(error) }), 'error');
   }
 }
@@ -585,7 +586,7 @@ function getTranslatedArray(key: string, fallbackArray: string[]) {
       return translatedArray;
     }
   } catch (error) {
-    console.warn(`Error accessing ${key}:`, error);
+    logger.warn(`Error accessing ${key}:`, error);
   }
   
   return fallbackArray;

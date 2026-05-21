@@ -9,6 +9,7 @@ import EnginesPage from "./components/EnginesPage.vue";
 import PriorityPage from "./components/PriorityPage.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import LanguageSwitcher from "./components/LanguageSwitcher.vue";
+import { logger } from "./utils/logger";
 
 const currentPage = ref('home');
 
@@ -40,7 +41,7 @@ onMounted(async () => {
   try {
     // 1. 初始化语言设置（优先级最高）
     await initializeLocale();
-    console.log('✅ 语言初始化完成');
+    logger.debug('语言初始化完成');
     
     // 2. 加载搜索设置
     const savedSettings = await invoke('get_search_settings') as any;
@@ -52,7 +53,7 @@ onMounted(async () => {
       searchState.value.showDebugArea = savedSettings.show_debug_area ?? false;
     }
   } catch (error) {
-    console.error('Failed to load app settings:', error);
+    logger.error('Failed to load app settings:', error);
   }
 });
 
@@ -77,7 +78,7 @@ watch(
         }
       });
     } catch (error) {
-      console.error('Failed to save search settings:', error);
+      logger.error('Failed to save search settings:', error);
     }
   },
   { deep: true }

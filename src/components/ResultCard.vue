@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from '../composables/useI18n';
+import { logger } from '../utils/logger';
 
 interface Props {
   title?: string;
@@ -83,7 +84,7 @@ async function loadDownloadConfig() {
     const config = await invoke("get_download_config");
     quickDownloadEnabled.value = (config as any).enable_quick_download;
   } catch (error) {
-    console.error("Failed to load download config:", error);
+    logger.error("Failed to load download config:", error);
     quickDownloadEnabled.value = false;
   }
 }
@@ -94,10 +95,10 @@ async function quickDownload(magnetLink: string | undefined) {
   isDownloading.value = true;
   try {
     await invoke("open_magnet_link", { magnetLink });
-    console.log("Magnet link opened successfully");
+    logger.debug("Magnet link opened successfully");
     emit('showNotification', t('components.resultCard.messages.downloadStarted'), 'success');
   } catch (error) {
-    console.error("Failed to open magnet link:", error);
+    logger.error("Failed to open magnet link:", error);
     emit('showNotification', t('components.resultCard.messages.downloadFailed', { error: String(error) }), 'error');
   } finally {
     isDownloading.value = false;

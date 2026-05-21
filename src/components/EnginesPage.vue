@@ -236,6 +236,7 @@ import { ref, onMounted, inject, computed } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from '../composables/useI18n';
 import { useConfirmDelete } from '../composables/useConfirmDelete';
+import { logger } from '../utils/logger';
 
 // 注入全局通知函数
 const showNotification = inject('showNotification') as (message: string, type?: 'success' | 'error', duration?: number) => void;
@@ -260,7 +261,7 @@ const { confirmDelete, getDeleteIcon, getDeleteButtonClass, getDeleteButtonTitle
       await invoke("delete_engine", { id });
       await loadEngines(); // 重新加载列表
     } catch (error) {
-      console.error("Failed to delete engine:", error);
+      logger.error("Failed to delete engine:", error);
       showNotification(t('pages.engines.messages.deleteFailed', { error: String(error) }), 'error');
     }
   }
@@ -318,7 +319,7 @@ async function loadEngines() {
     const result = await invoke("get_all_engines");
     engines.value = result as SearchEngine[];
   } catch (error) {
-    console.error("Failed to load engines:", error);
+    logger.error("Failed to load engines:", error);
     showNotification(t('pages.engines.messages.loadFailed', { error: String(error) }), 'error');
   } finally {
     loading.value = false;
@@ -334,7 +335,7 @@ async function toggleEngine(id: string, isEnabled: boolean) {
       engine.is_enabled = isEnabled;
     }
   } catch (error) {
-    console.error("Failed to update engine status:", error);
+    logger.error("Failed to update engine status:", error);
     showNotification(t('pages.engines.messages.updateStatusFailed', { error: String(error) }), 'error');
     // Reload to restore correct state
     await loadEngines();
@@ -394,7 +395,7 @@ async function addEngine() {
     await loadEngines(); // Reload the list
     showNotification(t('pages.engines.messages.addSuccess'));
   } catch (error) {
-    console.error("Failed to add engine:", error);
+    logger.error("Failed to add engine:", error);
     showNotification(t('pages.engines.messages.addFailed', { error: String(error) }), 'error');
   } finally {
     isAdding.value = false;
@@ -402,7 +403,7 @@ async function addEngine() {
 }
 
 function generateUrlTemplate(url1: string, url2: string): string {
-  console.log("🔧 Generating URL template from:", url1, "and", url2);
+  logger.debug("Generating URL template from:", url1, "and", url2);
 
   try {
     const urlObj1 = new URL(url1);
@@ -415,15 +416,15 @@ function generateUrlTemplate(url1: string, url2: string): string {
     const path1 = urlObj1.pathname;
     const path2 = urlObj2.pathname;
 
-    console.log("📍 Path1:", path1);
-    console.log("📍 Path2:", path2);
+    logger.debug("Path1:", path1);
+    logger.debug("Path2:", path2);
 
     // Split paths into segments for comparison
     const segments1 = path1.split('/').filter(s => s.length > 0);
     const segments2 = path2.split('/').filter(s => s.length > 0);
 
-    console.log("📂 Segments1:", segments1);
-    console.log("📂 Segments2:", segments2);
+    logger.debug("Segments1:", segments1);
+    logger.debug("Segments2:", segments2);
 
     // Build template path by comparing segments
     const templateSegments: string[] = [];
@@ -482,10 +483,10 @@ function generateUrlTemplate(url1: string, url2: string): string {
       template += '?' + templateParams.join('&');
     }
 
-    console.log("✅ Generated template:", template);
+    logger.debug("Generated template:", template);
     return template;
   } catch (error) {
-    console.error("❌ Failed to generate URL template:", error);
+    logger.error("Failed to generate URL template:", error);
     // Enhanced fallback: handle both path and query patterns
     let fallbackTemplate = url1;
 
@@ -498,7 +499,7 @@ function generateUrlTemplate(url1: string, url2: string): string {
     // Replace page numbers in query parameters
     fallbackTemplate = fallbackTemplate.replace(/([?&])page=1/, '$1page={page}');
 
-    console.log("🔄 Fallback template:", fallbackTemplate);
+    logger.debug("Fallback template:", fallbackTemplate);
     return fallbackTemplate;
   }
 }
@@ -521,12 +522,12 @@ function generateSegmentTemplate(seg1: string, seg2: string): string {
         const part1 = parts1[i];
         const part2 = parts2[i];
 
-        console.log(`🔍 Comparing part ${i}: "${part1}" vs "${part2}"`);
+        logger.debug(`Comparing part ${i}: "${part1}" vs "${part2}"`);
 
         // Priority 1: Check for the keyword 'test'.
         // This identifies the part of the URL that holds the search term.
         if (part1.toLowerCase() === 'test' && part2.toLowerCase() === 'test') {
-          console.log(`✅ Found keyword part: 'test' -> {keyword}`);
+          logger.debug("Found keyword part: 'test' -> {keyword}");
           templateParts.push('{keyword}');
           continue;
         }
@@ -544,7 +545,7 @@ function generateSegmentTemplate(seg1: string, seg2: string): string {
             // Check if they are consecutive numbers (like page 1 and 2)
             if (Math.abs(num1 - num2) === 1) {
               const restOfPart = part1.substring(num1Match[1].length);
-              console.log(`✅ Found page part: ${part1} vs ${part2} -> {page}`);
+              logger.debug(`Found page part: ${part1} vs ${part2} -> {page}`);
               templateParts.push(`{page}${restOfPart}`);
               continue;
             }
@@ -553,12 +554,12 @@ function generateSegmentTemplate(seg1: string, seg2: string): string {
 
         // Priority 3: If parts are identical, keep them as they are.
         if (part1 === part2) {
-          console.log(`➡️ Same parts: ${part1} -> ${part1}`);
+          logger.debug(`Same parts: ${part1} -> ${part1}`);
           templateParts.push(part1);
         } else {
           // Priority 4: Fallback for parts that are different but not recognized
           // as a keyword or page number. We default to the first URL's part.
-          console.log(`⚠️ Different parts: ${part1} vs ${part2} -> using ${part1}`);
+          logger.debug(`Different parts: ${part1} vs ${part2} -> using ${part1}`);
           templateParts.push(part1);
         }
       }
@@ -656,7 +657,7 @@ async function saveEditEngine() {
     cancelEditEngine(); // Exit edit mode
     showNotification(t('pages.engines.messages.updateSuccess'));
   } catch (error) {
-    console.error("Failed to update engine:", error);
+    logger.error("Failed to update engine:", error);
     showNotification(t('pages.engines.messages.updateFailed', { error: String(error) }), 'error');
   } finally {
     isSavingEdit.value = false;

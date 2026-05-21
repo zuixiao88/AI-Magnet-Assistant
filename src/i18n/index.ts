@@ -1,4 +1,5 @@
 import { createI18n, type I18n } from 'vue-i18n'
+import { logger } from '../utils/logger'
 
 // 支持的语言列表
 export const SUPPORTED_LOCALES = ['zh-CN', 'en'] as const;
@@ -45,7 +46,7 @@ export async function loadLocaleMessages(locale: SupportedLocale) {
     const messages = await import(`./locales/${locale}/index.ts`)
     return messages.default
   } catch (error) {
-    console.warn(`Failed to load locale messages for ${locale}:`, error)
+    logger.warn(`Failed to load locale messages for ${locale}:`, error)
     // 回退到英文
     if (locale !== FALLBACK_LOCALE) {
       return await loadLocaleMessages(FALLBACK_LOCALE)
@@ -66,7 +67,7 @@ export async function createI18nInstance() {
       const localeMessages = await loadLocaleMessages(supportedLocale);
       allMessages[supportedLocale] = localeMessages;
     } catch (error) {
-      console.warn(`Failed to preload locale ${supportedLocale}:`, error)
+      logger.warn(`Failed to preload locale ${supportedLocale}:`, error)
     }
   }
 

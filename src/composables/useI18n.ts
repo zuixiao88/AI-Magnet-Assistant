@@ -4,6 +4,7 @@ import { getI18n, SUPPORTED_LOCALES, type SupportedLocale, loadLocaleMessages } 
 import type { TranslationKey, TranslationParams } from '../i18n/types'
 import { AVAILABLE_LANGUAGES } from '../i18n/types'
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '../utils/logger'
 
 // 全局语言状态
 const currentLocale = ref<SupportedLocale>('zh-CN')
@@ -81,7 +82,7 @@ export function useLocale() {
   // 设置语言
   const setLocale = async (newLocale: SupportedLocale) => {
     if (!SUPPORTED_LOCALES.includes(newLocale)) {
-      console.warn(`Unsupported locale: ${newLocale}`)
+      logger.warn(`Unsupported locale: ${newLocale}`)
       return
     }
 
@@ -109,13 +110,13 @@ export function useLocale() {
       // 5. 通知后端语言变更并持久化
       try {
         await invoke('set_app_locale_with_persistence', { locale: newLocale })
-        console.log(`📝 语言已切换到: ${newLocale}`)
+        logger.debug(`语言已切换到: ${newLocale}`)
       } catch (error) {
-        console.warn('Failed to notify backend of locale change:', error)
+        logger.warn('Failed to notify backend of locale change:', error)
       }
 
     } catch (error) {
-      console.error(`Failed to switch language to ${newLocale}:`, error)
+      logger.error(`Failed to switch language to ${newLocale}:`, error)
     }
   }
 
@@ -147,7 +148,7 @@ export function useLocale() {
         return
       }
     } catch (error) {
-      console.warn('Failed to get locale from backend, using local settings:', error)
+      logger.warn('Failed to get locale from backend, using local settings:', error)
     }
 
     // 2. 回退到本地存储和浏览器设置
@@ -224,5 +225,5 @@ export function useFormatting() {
 
 // 监听语言变化，同步到全局状态
 watch(currentLocale, (newLocale) => {
-  console.log('📝 语言设置已更新并持久化:', newLocale)
+  logger.debug('语言设置已更新并持久化:', newLocale)
 }, { immediate: true })

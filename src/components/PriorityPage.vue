@@ -94,6 +94,7 @@ import { ref, onMounted, inject } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from '../composables/useI18n';
 import { useConfirmDelete } from '../composables/useConfirmDelete';
+import { logger } from '../utils/logger';
 
 interface PriorityKeyword {
   id: string;
@@ -115,7 +116,7 @@ const { confirmDelete, getDeleteIcon, getDeleteButtonClass, getDeleteButtonTitle
       await invoke("delete_priority_keyword", { id });
       await loadKeywords(); // 重新加载列表
     } catch (error) {
-      console.error("Failed to delete keyword:", error);
+      logger.error("Failed to delete keyword:", error);
       showNotification(t('pages.priority.messages.deleteFailed', { error: String(error) }), 'error');
     }
   }
@@ -131,7 +132,7 @@ async function loadKeywords() {
     const result = await invoke("get_all_priority_keywords");
     keywords.value = result as PriorityKeyword[];
   } catch (error) {
-    console.error("Failed to load keywords:", error);
+    logger.error("Failed to load keywords:", error);
     showNotification(t('pages.priority.messages.loadFailed', { error: String(error) }), 'error');
   } finally {
     loading.value = false;
@@ -157,7 +158,7 @@ async function addKeyword() {
     newKeyword.value = "";
     await loadKeywords(); // Reload the list
   } catch (error) {
-    console.error("Failed to add keyword:", error);
+    logger.error("Failed to add keyword:", error);
     showNotification(t('pages.priority.messages.addFailed', { error: String(error) }), 'error');
   } finally {
     isAdding.value = false;
