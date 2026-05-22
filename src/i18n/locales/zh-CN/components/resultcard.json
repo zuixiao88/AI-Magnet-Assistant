@@ -8,7 +8,7 @@
         "copyMagnetLink": "复制磁力链接",
         "copied": "已复制！",
         "quickDownload": "快速下载",
-        "playMagnet": "复制并在线播放磁力",
+        "playMagnet": "本地 P2P 播放",
         "opening": "打开中...",
         "previewContent": "预览磁力内容"
       },
@@ -40,9 +40,9 @@
       "messages": {
         "downloadStarted": "下载启动成功！",
         "downloadFailed": "启动下载失败：{error}",
-        "playStarted": "已复制磁力链接并打开在线播放页面。",
-        "playStartedCopyFallback": "在线播放页面已打开，但自动复制失败；播放页仍会通过链接参数加载磁力。",
-        "playFailed": "打开在线播放失败：{error}",
+        "playStarted": "已复制磁力链接并打开本地 P2P 播放器。",
+        "playStartedCopyFallback": "本地 P2P 播放器已打开，但自动复制失败；播放器仍会通过链接参数加载磁力。",
+        "playFailed": "打开本地 P2P 播放器失败：{error}",
         "copyFailed": "复制失败，请手动选择磁力链接复制。"
       }
     }

@@ -8,7 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "playMagnet": "Copy and play magnet online",
+        "playMagnet": "Local P2P playback",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -40,9 +40,9 @@
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
-        "playStarted": "Magnet link copied and online playback page opened.",
-        "playStartedCopyFallback": "Online playback page opened, but automatic copy failed; the playback page will still receive the magnet through the URL.",
-        "playFailed": "Failed to open online playback: {error}",
+        "playStarted": "Magnet link copied and local P2P player opened.",
+        "playStartedCopyFallback": "Local P2P player opened, but automatic copy failed; the player will still receive the magnet through the URL.",
+        "playFailed": "Failed to open local P2P player: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }

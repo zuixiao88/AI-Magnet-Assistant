@@ -11,6 +11,7 @@ mod i18n;
 use tauri::Manager;
 use regex::Regex;
 use searcher::SearchCore;
+use std::collections::HashSet;
 
 // ============ 辅助函数 ============
 
@@ -678,15 +679,420 @@ async fn open_magnet_link(
 }
 
 #[tauri::command]
-async fn play_magnet_link(magnet_link: String) -> Result<(), String> {
+async fn refresh_tracker_servers(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, app_state::AppState>,
+) -> Result<app_state::DownloadConfig, String> {
+    let config = app_state::get_download_config(&state);
+    let trackers = fetch_tracker_servers(&config.tracker_sources).await?;
+
+    app_state::update_tracker_servers(&state, trackers, chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())?;
+    app_state::save_app_state(&app_handle, &state).map_err(|e| e.to_string())?;
+
+    Ok(app_state::get_download_config(&state))
+}
+
+#[tauri::command]
+async fn play_magnet_link(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, app_state::AppState>,
+    magnet_link: String,
+) -> Result<(), String> {
     if !magnet_link.starts_with("magnet:?") {
         return Err("Invalid magnet link.".to_string());
     }
 
-    let play_url = format!("https://webtor.io/#{}", magnet_link);
-    open_url_with_default_browser(&play_url)?;
+    let config = ensure_daily_tracker_update(&app_handle, &state).await?;
+    let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
+    create_and_open_local_p2p_player(&app_handle, &enhanced_magnet, &config.tracker_servers)?;
 
     Ok(())
+}
+
+async fn ensure_daily_tracker_update(
+    app_handle: &tauri::AppHandle,
+    state: &tauri::State<'_, app_state::AppState>,
+) -> Result<app_state::DownloadConfig, String> {
+    let app_state = state.inner();
+    let config = app_state::get_download_config(app_state);
+
+    if !tracker_update_due(config.tracker_last_updated.as_deref()) {
+        return Ok(config);
+    }
+
+    match fetch_tracker_servers(&config.tracker_sources).await {
+        Ok(trackers) => {
+            app_state::update_tracker_servers(app_state, trackers, chrono::Utc::now().to_rfc3339())
+                .map_err(|e| e.to_string())?;
+            app_state::save_app_state(app_handle, app_state).map_err(|e| e.to_string())?;
+            Ok(app_state::get_download_config(app_state))
+        }
+        Err(error) => {
+            eprintln!("Failed to update tracker servers, using cached list: {error}");
+            Ok(config)
+        }
+    }
+}
+
+fn tracker_update_due(last_updated: Option<&str>) -> bool {
+    let Some(last_updated) = last_updated else {
+        return true;
+    };
+
+    let Ok(last_updated) = chrono::DateTime::parse_from_rfc3339(last_updated) else {
+        return true;
+    };
+
+    chrono::Utc::now()
+        .signed_duration_since(last_updated.with_timezone(&chrono::Utc))
+        .num_hours()
+        >= 24
+}
+
+async fn fetch_tracker_servers(sources: &[String]) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("AI-Magnet-Assistant/1.2.0")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let mut trackers = app_state::default_tracker_servers();
+    let mut seen: HashSet<String> = trackers.iter().cloned().collect();
+    let mut errors = Vec::new();
+
+    for source in sources {
+        match client.get(source).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.text().await {
+                    Ok(text) => {
+                        for tracker in parse_tracker_list(&text) {
+                            if seen.insert(tracker.clone()) {
+                                trackers.push(tracker);
+                            }
+                        }
+                    }
+                    Err(error) => errors.push(format!("{source}: {error}")),
+                },
+                Err(error) => errors.push(format!("{source}: {error}")),
+            },
+            Err(error) => errors.push(format!("{source}: {error}")),
+        }
+    }
+
+    if trackers.len() == app_state::default_tracker_servers().len() && !errors.is_empty() {
+        return Err(format!("Failed to fetch tracker sources: {}", errors.join("; ")));
+    }
+
+    trackers.truncate(300);
+    Ok(trackers)
+}
+
+fn parse_tracker_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.starts_with("udp://")
+                || lower.starts_with("http://")
+                || lower.starts_with("https://")
+                || lower.starts_with("ws://")
+                || lower.starts_with("wss://")
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn append_trackers_to_magnet(magnet_link: &str, trackers: &[String]) -> String {
+    let mut result = magnet_link.to_string();
+    let existing = magnet_link.to_ascii_lowercase();
+
+    for tracker in trackers {
+        if tracker.trim().is_empty() {
+            continue;
+        }
+
+        let encoded_tracker = urlencoding::encode(tracker);
+        if existing.contains(&format!("tr={}", encoded_tracker).to_ascii_lowercase()) {
+            continue;
+        }
+
+        result.push_str("&tr=");
+        result.push_str(&encoded_tracker);
+    }
+
+    result
+}
+
+fn create_and_open_local_p2p_player(
+    app_handle: &tauri::AppHandle,
+    magnet_link: &str,
+    trackers: &[String],
+) -> Result<(), String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
+
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+
+    let player_file = app_data_dir.join("local_p2p_player.html");
+    let browser_trackers: Vec<String> = trackers
+        .iter()
+        .filter(|tracker| {
+            let tracker = tracker.to_ascii_lowercase();
+            tracker.starts_with("ws://") || tracker.starts_with("wss://")
+        })
+        .cloned()
+        .collect();
+
+    let magnet_json = serde_json::to_string(magnet_link)
+        .map_err(|e| format!("Failed to encode magnet link: {e}"))?;
+    let trackers_json = serde_json::to_string(&browser_trackers)
+        .map_err(|e| format!("Failed to encode tracker list: {e}"))?;
+
+    let html_content = format!(r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Magnet Assistant Local P2P Player</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #0f172a;
+      color: #e5eefb;
+    }}
+    .shell {{
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 24px;
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: 22px;
+      font-weight: 700;
+    }}
+    .status {{
+      margin: 0 0 16px;
+      color: #9fb2ce;
+      line-height: 1.5;
+    }}
+    .panel {{
+      border: 1px solid #243247;
+      border-radius: 8px;
+      background: #111c30;
+      overflow: hidden;
+    }}
+    #player {{
+      min-height: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #050914;
+    }}
+    #player video, #player audio {{
+      width: 100%;
+      max-height: 72vh;
+      display: block;
+      background: #000;
+    }}
+    .meta {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px;
+      border-top: 1px solid #243247;
+    }}
+    .item {{
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid #243247;
+      border-radius: 6px;
+      background: #0c1525;
+    }}
+    .item span {{
+      display: block;
+      margin-bottom: 4px;
+      color: #8aa0bd;
+      font-size: 12px;
+    }}
+    .item strong {{
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }}
+    .files {{
+      margin-top: 14px;
+      border: 1px solid #243247;
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    .file {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #243247;
+      cursor: pointer;
+    }}
+    .file:last-child {{ border-bottom: none; }}
+    .file:hover {{ background: #18253a; }}
+    .file-name {{
+      min-width: 0;
+      overflow-wrap: anywhere;
+      color: #dce8f7;
+    }}
+    .file-size {{ color: #8aa0bd; white-space: nowrap; }}
+    .warning {{
+      margin-top: 14px;
+      color: #fbbf24;
+      font-size: 13px;
+      line-height: 1.5;
+    }}
+    @media (max-width: 720px) {{
+      .shell {{ padding: 14px; }}
+      .meta {{ grid-template-columns: 1fr; }}
+      #player {{ min-height: 260px; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <h1>Local P2P Player</h1>
+    <p id="status" class="status">Loading WebTorrent engine...</p>
+    <div class="panel">
+      <div id="player">Waiting for playable media...</div>
+      <div class="meta">
+        <div class="item"><span>Progress</span><strong id="progress">0%</strong></div>
+        <div class="item"><span>Download speed</span><strong id="downloadSpeed">0 B/s</strong></div>
+        <div class="item"><span>Peers</span><strong id="peers">0</strong></div>
+      </div>
+    </div>
+    <div id="warning" class="warning"></div>
+    <div id="files" class="files"></div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+  <script>
+    const magnetURI = {magnet_json};
+    const trackers = {trackers_json};
+    const statusEl = document.getElementById('status');
+    const warningEl = document.getElementById('warning');
+    const filesEl = document.getElementById('files');
+    const playerEl = document.getElementById('player');
+    const progressEl = document.getElementById('progress');
+    const speedEl = document.getElementById('downloadSpeed');
+    const peersEl = document.getElementById('peers');
+
+    navigator.clipboard?.writeText(magnetURI).catch(() => undefined);
+
+    if (!trackers.length) {{
+      warningEl.textContent = 'No WebRTC tracker is available. Browser-based local P2P playback requires ws:// or wss:// trackers.';
+    }}
+
+    function formatBytes(bytes) {{
+      if (!bytes) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      return `${{(bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0)}} ${{units[index]}}`;
+    }}
+
+    function playFile(file) {{
+      playerEl.textContent = 'Preparing stream...';
+      file.renderTo(playerEl, {{ autoplay: true, controls: true }}, (err) => {{
+        if (err) {{
+          playerEl.textContent = 'This file cannot be rendered by the browser player.';
+          statusEl.textContent = err.message || String(err);
+        }}
+      }});
+    }}
+
+    window.addEventListener('error', (event) => {{
+      statusEl.textContent = event.message || 'Player failed to start.';
+    }});
+
+    if (!window.WebTorrent) {{
+      statusEl.textContent = 'WebTorrent engine failed to load. Check network access to the player engine CDN.';
+    }} else {{
+      const client = new WebTorrent();
+      statusEl.textContent = 'Connecting to peers...';
+      client.add(magnetURI, {{ announce: trackers }}, (torrent) => {{
+        statusEl.textContent = `Loaded: ${{torrent.name || 'magnet task'}}`;
+        filesEl.innerHTML = '';
+
+        const playable = torrent.files.find((file) => /\.(mp4|webm|mkv|m4v|mov|mp3|ogg|wav|flac|aac)$/i.test(file.name));
+
+        torrent.files.forEach((file) => {{
+          const row = document.createElement('div');
+          const name = document.createElement('div');
+          const size = document.createElement('div');
+          row.className = 'file';
+          name.className = 'file-name';
+          size.className = 'file-size';
+          name.textContent = file.name;
+          size.textContent = formatBytes(file.length);
+          row.appendChild(name);
+          row.appendChild(size);
+          row.addEventListener('click', () => playFile(file));
+          filesEl.appendChild(row);
+        }});
+
+        if (playable) {{
+          playFile(playable);
+        }} else {{
+          playerEl.textContent = 'No browser-playable media file found. Select a media file from the list if available.';
+        }}
+
+        setInterval(() => {{
+          progressEl.textContent = `${{(torrent.progress * 100).toFixed(1)}}%`;
+          speedEl.textContent = `${{formatBytes(torrent.downloadSpeed)}}/s`;
+          peersEl.textContent = String(torrent.numPeers);
+        }}, 1000);
+      }});
+    }}
+  </script>
+</body>
+</html>"#);
+
+    std::fs::write(&player_file, html_content)
+        .map_err(|e| format!("Failed to create local P2P player: {e}"))?;
+
+    open_file_with_default_browser(&player_file)
+}
+
+fn open_file_with_default_browser(file_path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open local player: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open local player: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open local player: {e}"))?;
+        Ok(())
+    }
 }
 
 fn open_url_with_default_browser(url: &str) -> Result<(), String> {
@@ -1066,6 +1472,13 @@ fn main() {
             let app_state = app_state::init_app_state(app.handle())
                 .expect("Failed to initialize app state");
             app.manage(app_state);
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<app_state::AppState>();
+                let _ = ensure_daily_tracker_update(&app_handle, &state).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1101,6 +1514,7 @@ fn main() {
             // 下载配置命令
             get_download_config,
             update_download_config,
+            refresh_tracker_servers,
             open_magnet_link,
             play_magnet_link,
             browse_for_file,

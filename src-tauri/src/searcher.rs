@@ -200,11 +200,11 @@ impl ClmclmProvider {
     }
 
     fn extract_preview_image(&self, element: &scraper::ElementRef) -> Option<String> {
-        let image_selector = Selector::parse("img[src]").ok()?;
+        let image_selector = Selector::parse("img").ok()?;
 
         element
             .select(&image_selector)
-            .filter_map(|image| image.value().attr("src"))
+            .filter_map(extract_image_source)
             .find(|src| is_content_preview_image(src))
             .map(|src| self.normalize_source_url(src))
     }
@@ -636,6 +636,25 @@ impl GenericProvider {
         }
     }
 
+    fn normalize_asset_url(&self, src: &str) -> String {
+        if src.starts_with("http://") || src.starts_with("https://") {
+            src.to_string()
+        } else if src.starts_with("//") {
+            format!("https:{src}")
+        } else if src.starts_with("/") {
+            self.extract_base_url_from_template()
+                .map(|base| format!("{base}{src}"))
+                .unwrap_or_else(|| src.to_string())
+        } else if let Ok(template_url) = url::Url::parse(&self.url_template) {
+            template_url
+                .join(src)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| src.to_string())
+        } else {
+            src.to_string()
+        }
+    }
+
     // 注意：parse_ai_html_response 函数已被删除，因为现在直接使用 BatchExtractBasicInfoResult
 
     /// 分离优先结果和普通结果
@@ -825,13 +844,13 @@ impl GenericProvider {
     }
 
     fn extract_preview_image(&self, element: &scraper::ElementRef) -> Option<String> {
-        let image_selector = Selector::parse("img[src]").ok()?;
+        let image_selector = Selector::parse("img").ok()?;
 
         element
             .select(&image_selector)
-            .filter_map(|image| image.value().attr("src"))
+            .filter_map(extract_image_source)
             .find(|src| is_content_preview_image(src))
-            .map(|src| self.normalize_source_url(src))
+            .map(|src| self.normalize_asset_url(src))
     }
 
     /// 判断文本是否是文件大小
@@ -977,11 +996,21 @@ fn format_unix_date(timestamp: i64) -> Option<String> {
 
 fn is_content_preview_image(src: &str) -> bool {
     let src_lower = src.to_lowercase();
-    !src_lower.contains("logo")
+    !src_lower.starts_with("data:")
+        && !src_lower.contains("logo")
         && !src_lower.contains("icon")
         && !src_lower.contains("sprite")
         && !src_lower.contains("avatar")
+        && !src_lower.contains("loading")
+        && !src_lower.contains("blank")
         && !src_lower.ends_with(".svg")
+}
+
+fn extract_image_source(image: scraper::ElementRef) -> Option<&str> {
+    ["data-original", "data-src", "file", "zoomfile", "src"]
+        .iter()
+        .filter_map(|attr| image.value().attr(attr))
+        .find(|src| !src.trim().is_empty())
 }
 
 /// 从标题中提取干净的名称（移除特殊字符和格式信息）

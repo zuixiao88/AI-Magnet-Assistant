@@ -123,6 +123,12 @@ pub struct DownloadConfig {
     pub custom_app_path: Option<String>, // 自定义应用程序路径
     pub enable_quick_download: bool, // 是否启用快速下载按钮
     pub auto_close_page: bool, // 是否自动关闭下载页面
+    #[serde(default = "default_tracker_sources")]
+    pub tracker_sources: Vec<String>,
+    #[serde(default)]
+    pub tracker_servers: Vec<String>,
+    #[serde(default)]
+    pub tracker_last_updated: Option<String>,
 }
 
 impl Default for DownloadConfig {
@@ -131,8 +137,26 @@ impl Default for DownloadConfig {
             custom_app_path: None,
             enable_quick_download: true,
             auto_close_page: true,
+            tracker_sources: default_tracker_sources(),
+            tracker_servers: default_tracker_servers(),
+            tracker_last_updated: None,
         }
     }
+}
+
+pub fn default_tracker_sources() -> Vec<String> {
+    vec![
+        "http://github.itzmx.com/1265578519/OpenTracker/master/tracker.txt".to_string(),
+        "https://down.adysec.com/trackers_best.txt".to_string(),
+    ]
+}
+
+pub fn default_tracker_servers() -> Vec<String> {
+    vec![
+        "wss://tracker.openwebtorrent.com".to_string(),
+        "wss://tracker.btorrent.xyz".to_string(),
+        "wss://tracker.files.fm:7073/announce".to_string(),
+    ]
 }
 
 /// 应用状态数据结构
@@ -200,6 +224,13 @@ fn default_search_engines() -> Vec<SearchEngine> {
             is_enabled: true,
             is_deletable: true,
         },
+        SearchEngine {
+            id: "default_sehuatang".to_string(),
+            name: "Sehuatang".to_string(),
+            url_template: "https://sehuatang.net/search.php?mod=forum&searchsubmit=yes&srchtxt={keyword}&page={page}".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
     ]
 }
 
@@ -221,6 +252,14 @@ fn migrate_app_data(data: &mut AppData) -> bool {
 
     if data.search_settings.max_pages < 3 {
         data.search_settings.max_pages = 3;
+    }
+
+    if data.download_config.tracker_sources.is_empty() {
+        data.download_config.tracker_sources = default_tracker_sources();
+    }
+
+    if data.download_config.tracker_servers.is_empty() {
+        data.download_config.tracker_servers = default_tracker_servers();
     }
 
     data.version = APP_DATA_VERSION.to_string();
@@ -533,6 +572,17 @@ pub fn get_download_config(state: &AppState) -> DownloadConfig {
 pub fn update_download_config(state: &AppState, config: DownloadConfig) -> Result<()> {
     let mut data = state.lock().unwrap();
     data.download_config = config;
+    Ok(())
+}
+
+pub fn update_tracker_servers(
+    state: &AppState,
+    tracker_servers: Vec<String>,
+    tracker_last_updated: String,
+) -> Result<()> {
+    let mut data = state.lock().unwrap();
+    data.download_config.tracker_servers = tracker_servers;
+    data.download_config.tracker_last_updated = Some(tracker_last_updated);
     Ok(())
 }
 
