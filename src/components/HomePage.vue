@@ -67,6 +67,7 @@
             :analysis="result.analysis"
             :is-priority="result.isPriority"
             :file-list="result.file_list"
+            :source-engine="result.source_engine"
             :source-url="result.source_url"
             :preview-image-url="result.preview_image_url"
             @add-to-favorites="addToFavorites"
@@ -318,7 +319,6 @@ async function search() {
 
     searchStatus.value = t('pages.home.search.status.searchingWithModel', { modelInfo });
 
-    // 并行启动两个搜索
     const clmclmPromise = invoke("search_clmclm_first", {
       keyword: keyword.value,
       maxPages: maxPages.value
@@ -329,85 +329,45 @@ async function search() {
       maxPages: maxPages.value
     });
 
-    // 等待clmclm результат（通常更快）
-    try {
-      const clmclmResults = await clmclmPromise;
+    const [clmclmSettled, otherSettled] = await Promise.allSettled([clmclmPromise, otherEnginesPromise]);
 
-      // 检查搜索是否被取消
-      if (isSearchCancelled()) {
-        logger.debug('Search cancelled after clmclm results');
-        return;
-      }
-
-      // 立即显示clmclm结果
-      if (clmclmResults && (clmclmResults as any[]).length > 0) {
-        results.value = filterResultsByKeyword(clmclmResults as any[]);
-        searchStatus.value = t('pages.home.search.status.foundFromEngine', { 
-          count: results.value.length, 
-          engine: 'clmclm.com',
-          modelInfo 
-        });
-
-        // 立即排序和分析clmclm结果
-        await sortResults(results.value);
-
-        if (useSmartFilter.value && results.value.length > 0) {
-          // 再次检查搜索是否被取消
-          if (isSearchCancelled()) {
-            logger.debug('Search cancelled before clmclm analysis');
-            return;
-          }
-          searchStatus.value = t('pages.home.search.status.analyzingWithModel', { modelInfo });
-          await analyzeResults();
-          await sortResults(results.value);
-        }
-      }
-    } catch (error) {
-      logger.debug('clmclm search failed:', error);
-      searchErrors.push(formatSearchError('clmclm.com', error));
-      searchStatus.value = t('pages.home.search.status.engineFailed', { engine: 'clmclm.com', modelInfo });
+    if (isSearchCancelled()) {
+      logger.debug('Search cancelled after search results');
+      return;
     }
 
-    // 等待其他引擎结果
-    try {
-      const otherResults = await otherEnginesPromise;
+    const mergedResults: any[] = [];
 
-      // 检查搜索是否被取消
+    if (clmclmSettled.status === 'fulfilled') {
+      mergedResults.push(...filterResultsByKeyword((clmclmSettled.value as any[]) || []));
+    } else {
+      logger.debug('clmclm search failed:', clmclmSettled.reason);
+      searchErrors.push(formatSearchError('clmclm.com', clmclmSettled.reason));
+    }
+
+    if (otherSettled.status === 'fulfilled') {
+      mergedResults.push(...filterResultsByKeyword((otherSettled.value as any[]) || []));
+    } else if (hasOtherEnabledEngines) {
+      logger.debug('Other engines search failed:', otherSettled.reason);
+      searchErrors.push(formatSearchError('Other engines', otherSettled.reason));
+    }
+
+    results.value = dedupeResults(mergedResults);
+    await sortResults(results.value);
+
+    searchStatus.value = t('pages.home.search.status.completeWithCount', {
+      count: results.value.length,
+      modelInfo
+    });
+
+    if (useSmartFilter.value && results.value.length > 0) {
       if (isSearchCancelled()) {
-        logger.debug('Search cancelled after other engines results');
+        logger.debug('Search cancelled before analysis');
         return;
       }
-
-      // 合并其他引擎的结果
-      if (otherResults && (otherResults as any[]).length > 0) {
-        const filteredOtherResults = filterResultsByKeyword(otherResults as any[]);
-        const allResults = [...results.value, ...filteredOtherResults];
-        results.value = allResults;
-        searchStatus.value = t('pages.home.search.status.completeWithCount', { 
-          count: results.value.length,
-          modelInfo 
-        });
-
-        // 重新排序所有结果
-        await sortResults(results.value);
-
-        // 如果启用了智能过滤，分析新增的结果
-        if (useSmartFilter.value && filteredOtherResults.length > 0) {
-          // 再次检查搜索是否被取消
-          if (isSearchCancelled()) {
-            logger.debug('Search cancelled before additional analysis');
-            return;
-          }
-          searchStatus.value = t('pages.home.search.status.analysisPartial', { modelInfo });
-          await analyzeResults();
-          await sortResults(results.value);
-        }
-      }
-    } catch (error) {
-      logger.debug('Other engines search failed:', error);
-      if (hasOtherEnabledEngines) {
-        searchErrors.push(formatSearchError('Other engines', error));
-      }
+      searchStatus.value = t('pages.home.search.status.analyzingWithModel', { modelInfo });
+      await analyzeResults();
+      await sortResults(results.value);
     }
 
     // 最终检查搜索是否被取消
@@ -439,6 +399,16 @@ async function search() {
       isSearching.value = false;
     }
   }
+}
+
+function dedupeResults(resultsArray: any[]) {
+  const seen = new Set<string>();
+  return resultsArray.filter((result: any) => {
+    const key = result.magnet_link || result.source_url || result.title;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function analyzeResults() {

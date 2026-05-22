@@ -68,14 +68,6 @@
         "autoClosePageHelp": "Automatically close the download page after 10 seconds",
         "enableQuickDownload": "Enable Quick Download Button",
         "enableQuickDownloadHelp": "Show a quick download button next to each magnet link in search results",
-        "trackers": {
-          "title": "Tracker servers",
-          "count": "{count} trackers cached",
-          "neverUpdated": "Never updated",
-          "help": "The app updates trackers daily from the built-in sources and appends them to magnet links for local P2P playback.",
-          "refresh": "Update trackers now",
-          "refreshing": "Updating..."
-        },
         "save": "Save Download Settings",
         "saving": "Saving..."
       },
@@ -129,8 +121,6 @@
         "downloadSettingsSaved": "Download settings saved successfully!",
         "downloadSettingsSaveFailed": "Failed to save download settings: {error}",
         "loadDownloadConfigFailed": "Failed to load download config: {error}",
-        "trackersUpdated": "Trackers updated successfully: {count}.",
-        "trackersUpdateFailed": "Failed to update trackers: {error}",
         "browseFileFailed": "Failed to browse for application: {error}",
         "openFolderFailed": "Could not open folder: {error}",
         "testConnectionSuccess": "{type} connection successful: {result}",

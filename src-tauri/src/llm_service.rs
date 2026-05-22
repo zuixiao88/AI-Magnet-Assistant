@@ -32,6 +32,19 @@ fn safe_api_url(normalized_base: &str, model: &str) -> String {
     format!("{normalized_base}/models/{model}:generateContent")
 }
 
+fn is_openai_compatible_provider(provider: &str) -> bool {
+    matches!(provider.to_ascii_lowercase().as_str(), "openai" | "deepseek")
+}
+
+fn normalize_chat_api_base(api_base: &str) -> String {
+    let trimmed_base = api_base.trim_end_matches('/');
+    if trimmed_base.ends_with("/v1") {
+        trimmed_base.to_string()
+    } else {
+        format!("{trimmed_base}/v1")
+    }
+}
+
 fn compact_error_body(error_body: &str) -> String {
     const MAX_ERROR_BODY_CHARS: usize = 500;
 
@@ -235,21 +248,108 @@ struct PartResponse {
     text: String,
 }
 
+#[derive(Serialize)]
+struct ChatCompletionRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    temperature: f32,
+}
+
+#[derive(Serialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatChoice {
+    message: ChatMessageResponse,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatMessageResponse {
+    content: String,
+}
+
 // --- 5. 核心实现 ---
 
 impl GeminiClient {
+    async fn generate_text(&self, config: &LlmConfig, prompt: &str) -> Result<String> {
+        if is_openai_compatible_provider(&config.provider) {
+            let base = normalize_chat_api_base(&config.api_base);
+            let url = format!("{base}/chat/completions");
+            let request_body = ChatCompletionRequest {
+                model: config.model.clone(),
+                messages: vec![ChatMessage {
+                    role: "user".to_string(),
+                    content: prompt.to_string(),
+                }],
+                temperature: 0.1,
+            };
+
+            let response = self
+                .client
+                .post(&url)
+                .bearer_auth(&config.api_key)
+                .json(&request_body)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_body = response.text().await.unwrap_or_default();
+                return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
+            }
+
+            let chat_response = response.json::<ChatCompletionResponse>().await?;
+            return chat_response
+                .choices
+                .first()
+                .map(|choice| choice.message.content.clone())
+                .ok_or_else(|| anyhow::anyhow!("Chat completion response did not include content"));
+        }
+
+        let normalized_base = normalize_api_base(&config.api_base);
+        let url = format!(
+            "{}/models/{}:generateContent?key={}",
+            normalized_base, config.model, config.api_key
+        );
+        let request_body = GeminiRequest {
+            contents: vec![Content {
+                parts: vec![Part {
+                    text: prompt.to_string(),
+                }],
+            }],
+        };
+
+        let response = self.client.post(&url).json(&request_body).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
+        }
+
+        let gemini_response = response.json::<GeminiResponse>().await?;
+        gemini_response
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.content.parts.first())
+            .map(|part| part.text.clone())
+            .ok_or_else(|| anyhow::anyhow!("Gemini响应中未找到有效内容"))
+    }
+
     /// **第一阶段实现**: 仅从HTML提取原始数据，不做任何修改。
     async fn batch_extract_basic_info_impl(
         &self,
         html_content: &str,
         config: &LlmConfig,
     ) -> Result<BatchExtractBasicInfoResult> {
-        let normalized_base = normalize_api_base(&config.api_base);
-        let url = format!(
-            "{}/models/{}:generateContent?key={}",
-            normalized_base, config.model, config.api_key
-        );
-
         let prompt = format!(
             r#"
 作为数据提取引擎，你的唯一任务是从以下HTML内容中识别出所有磁力链接条目，并返回一个包含 "results" 数组的JSON对象。
@@ -303,42 +403,18 @@ impl GeminiClient {
             html_content
         );
 
-        let request_body = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![Part { text: prompt }],
-            }],
-        };
-
-        let response = self.client.post(&url).json(&request_body).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            eprintln!(
-                "API请求失败: {} - {}",
-                status,
-                compact_error_body(&error_body)
-            );
-            return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
-        }
-
-        let gemini_response = response.json::<GeminiResponse>().await?;
-        if let Some(candidate) = gemini_response.candidates.first() {
-            if let Some(part) = candidate.content.parts.first() {
-                let cleaned_text = part.text.trim().replace("```json", "").replace("```", "");
-                let result: BatchExtractBasicInfoResult = serde_json::from_str(&cleaned_text)
-                    .map_err(|e| {
-                        eprintln!("第一阶段JSON解析失败: {e}");
-                        anyhow::anyhow!(
-                            "解析第一阶段JSON失败: {}. Raw text: {}",
-                            e,
-                            compact_error_body(&cleaned_text)
-                        )
-                    })?;
-                return Ok(result);
-            }
-        }
-        Err(anyhow::anyhow!("Gemini响应中未找到有效内容"))
+        let text = self.generate_text(config, &prompt).await?;
+        let cleaned_text = text.trim().replace("```json", "").replace("```", "");
+        let result: BatchExtractBasicInfoResult = serde_json::from_str(&cleaned_text)
+            .map_err(|e| {
+                eprintln!("第一阶段JSON解析失败: {e}");
+                anyhow::anyhow!(
+                    "解析第一阶段JSON失败: {}. Raw text: {}",
+                    e,
+                    compact_error_body(&cleaned_text)
+                )
+            })?;
+        Ok(result)
     }
 
     /// **重构后的第二阶段实现**: 根据新的、更简单的逻辑分析标题、文件列表和标签（支持重试）。
@@ -420,12 +496,6 @@ impl GeminiClient {
             return Ok(Vec::new());
         }
 
-        let normalized_base = normalize_api_base(&config.api_base);
-        let url = format!(
-            "{}/models/{}:generateContent?key={}",
-            normalized_base, config.model, config.api_key
-        );
-
         // 构建批量分析的 prompt
         let items_json = serde_json::to_string_pretty(items)?;
 
@@ -496,54 +566,32 @@ impl GeminiClient {
         // 移除详细的Prompt日志以简化输出
         // println!("[BATCH AI PROMPT] 批量分析prompt:\n---\n{}\n---", prompt);
 
-        let request_body = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![Part { text: prompt }],
-            }],
-        };
+        let text = self.generate_text(config, &prompt).await?;
+        let cleaned_text = text.trim().replace("```json", "").replace("```", "");
 
-        let response = self.client.post(&url).json(&request_body).send().await?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
+        #[derive(Deserialize)]
+        struct BatchAnalysisResponse {
+            results: Vec<BatchAnalysisResult>,
         }
 
-        let gemini_response = response.json::<GeminiResponse>().await?;
-        if let Some(candidate) = gemini_response.candidates.first() {
-            if let Some(part) = candidate.content.parts.first() {
-                let cleaned_text = part.text.trim().replace("```json", "").replace("```", "");
+        let batch_response: BatchAnalysisResponse = serde_json::from_str(&cleaned_text)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "解析批量分析响应JSON失败: {}. Raw text: {}",
+                    e,
+                    compact_error_body(&cleaned_text)
+                )
+            })?;
 
-                // 移除详细的响应日志以简化输出
-                // println!("[BATCH AI RESPONSE] 批量分析响应:\n---\n{}\n---", cleaned_text);
-
-                #[derive(Deserialize)]
-                struct BatchAnalysisResponse {
-                    results: Vec<BatchAnalysisResult>,
-                }
-
-                let batch_response: BatchAnalysisResponse = serde_json::from_str(&cleaned_text)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "解析批量分析响应JSON失败: {}. Raw text: {}",
-                            e,
-                            compact_error_body(&cleaned_text)
-                        )
-                    })?;
-
-                // 验证结果数量是否匹配
-                if batch_response.results.len() != items.len() {
-                    return Err(anyhow::anyhow!(
-                        "批量分析结果数量不匹配: 期望{}, 实际{}",
-                        items.len(),
-                        batch_response.results.len()
-                    ));
-                }
-
-                return Ok(batch_response.results);
-            }
+        if batch_response.results.len() != items.len() {
+            return Err(anyhow::anyhow!(
+                "批量分析结果数量不匹配: 期望{}, 实际{}",
+                items.len(),
+                batch_response.results.len()
+            ));
         }
-        Err(anyhow::anyhow!("Gemini响应中未找到有效内容"))
+
+        Ok(batch_response.results)
     }
 }
 
@@ -553,6 +601,36 @@ impl GeminiClient {
 
 /// 测试与LLM提供商的连接。
 pub async fn test_connection(config: &LlmConfig) -> Result<String> {
+    if is_openai_compatible_provider(&config.provider) {
+        let base = normalize_chat_api_base(&config.api_base);
+        let url = format!("{base}/chat/completions");
+        println!("Testing chat connection to: {url}");
+        let request_body = ChatCompletionRequest {
+            model: config.model.clone(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "你好".to_string(),
+            }],
+            temperature: 0.1,
+        };
+        let client = Client::new();
+        let response = client
+            .post(&url)
+            .bearer_auth(&config.api_key)
+            .json(&request_body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            println!("✅ Connection successful (Status: {status}).");
+            return Ok("连接成功".to_string());
+        }
+
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(api_error_message(status, &error_body)));
+    }
+
     let normalized_base = normalize_api_base(&config.api_base);
     let url = format!(
         "{}/models/{}:generateContent?key={}",

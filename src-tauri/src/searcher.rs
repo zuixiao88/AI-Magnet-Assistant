@@ -106,6 +106,7 @@ pub struct SearchResult {
     pub file_size: Option<String>,
     pub upload_date: Option<String>,
     pub file_list: Vec<String>,
+    pub source_engine: Option<String>,
     pub source_url: Option<String>,
     pub preview_image_url: Option<String>,
     pub score: Option<u8>,
@@ -285,6 +286,7 @@ impl ClmclmProvider {
                         file_size,
                         upload_date: None, // clmclm.com doesn't provide upload date
                         file_list,
+                        source_engine: Some(self.name().to_string()),
                         source_url,
                         preview_image_url: self.extract_preview_image(&element),
                         score: None,
@@ -474,6 +476,7 @@ impl GenericProvider {
                         file_size: item.size_bytes.map(format_bytes),
                         upload_date: item.created_unix.and_then(format_unix_date),
                         file_list: generate_file_list_from_title(&item.name),
+                        source_engine: Some(self.name.clone()),
                         source_url: None,
                         preview_image_url: None,
                         score: None,
@@ -599,6 +602,7 @@ impl GenericProvider {
                 file_size: basic_info.file_size,
                 upload_date: None, // 第一阶段不提取上传日期
                 file_list,
+                source_engine: Some(self.name.clone()),
                 source_url,
                 preview_image_url: None,
                 score: None,
@@ -782,6 +786,7 @@ impl GenericProvider {
             file_size,
             upload_date,
             file_list,
+            source_engine: Some(self.name.clone()),
             source_url,
             preview_image_url: self.extract_preview_image(row),
             score: None,
@@ -807,6 +812,7 @@ impl GenericProvider {
                     file_size: None,
                     upload_date: None,
                     file_list,
+                    source_engine: Some(self.name.clone()),
                     source_url: None,
                     preview_image_url: None,
                     score: None,
@@ -1058,7 +1064,7 @@ pub struct SearchCore {
 impl SearchCore {
     // 注意：基础构造函数已被删除，统一使用 create_ai_enhanced_search_core
 
-    /// 多页搜索 - 按提供商顺序搜索，优先返回clmclm结果
+    /// 多页搜索 - 所有提供商和页码并发执行，减少慢引擎阻塞。
     pub async fn search_multi_page(&self, query: &str, max_pages: u32) -> Result<Vec<SearchResult>> {
         if self.providers.is_empty() {
             return Err(anyhow!("No search providers available"));
@@ -1067,79 +1073,42 @@ impl SearchCore {
         println!("🔍 Starting search with {} providers, {} pages each", self.providers.len(), max_pages);
 
         let mut all_results = Vec::new();
-
-        // 分离clmclm和其他提供商
-        let mut clmclm_provider = None;
-        let mut other_providers = Vec::new();
+        let mut search_futures = Vec::new();
 
         for provider in &self.providers {
-            if provider.name() == "clmclm.com" {
-                clmclm_provider = Some(Arc::clone(provider));
-            } else {
-                other_providers.push(Arc::clone(provider));
-            }
-        }
-
-        // 1. 首先搜索clmclm（如果启用）
-        if let Some(clmclm) = clmclm_provider {
-            println!("🔍 Searching clmclm.com first for faster results");
             for page in 1..=max_pages {
-                match clmclm.search(query, page).await {
-                    Ok(mut results) => {
-                        let count = results.len();
-                        println!("✅ clmclm.com page {page} returned {count} results");
-                        all_results.append(&mut results);
+                let provider = Arc::clone(provider);
+                let query = query.to_string();
+                let provider_name = provider.name().to_string();
+
+                let search_future = async move {
+                    println!("🔍 Searching {query} page {page} with provider: {provider_name}");
+                    match provider.search(&query, page).await {
+                        Ok(results) => {
+                            let count = results.len();
+                            println!("✅ Provider {provider_name} page {page} returned {count} results");
+                            Ok(results)
+                        }
+                        Err(e) => {
+                            println!("❌ Provider {provider_name} page {page} failed: {e}");
+                            Err(e)
+                        }
                     }
-                    Err(e) => {
-                        println!("❌ clmclm.com page {page} failed: {e}");
-                    }
-                }
+                };
+
+                search_futures.push(search_future);
             }
         }
 
-        // 2. 然后并发搜索其他提供商
-        if !other_providers.is_empty() {
-            println!("🔍 Now searching {} other providers concurrently", other_providers.len());
+        let results = join_all(search_futures).await;
 
-            let mut other_search_futures = Vec::new();
-
-            for provider in other_providers {
-                for page in 1..=max_pages {
-                    let provider = Arc::clone(&provider);
-                    let query = query.to_string();
-                    let provider_name = provider.name().to_string();
-
-                    let search_future = async move {
-                        println!("🔍 Searching {query} page {page} with provider: {provider_name}");
-                        match provider.search(&query, page).await {
-                            Ok(results) => {
-                                let count = results.len();
-                                println!("✅ Provider {provider_name} page {page} returned {count} results");
-                                Ok(results)
-                            }
-                            Err(e) => {
-                                println!("❌ Provider {provider_name} page {page} failed: {e}");
-                                Err(e)
-                            }
-                        }
-                    };
-
-                    other_search_futures.push(search_future);
+        for result in results {
+            match result {
+                Ok(mut page_results) => {
+                    all_results.append(&mut page_results);
                 }
-            }
-
-            // 并发执行其他搜索任务
-            let results = join_all(other_search_futures).await;
-
-            for result in results {
-                match result {
-                    Ok(mut page_results) => {
-                        all_results.append(&mut page_results);
-                    }
-                    Err(e) => {
-                        println!("⚠️ Search task failed: {e}");
-                        // 继续处理其他结果，不因为单个任务失败而中断
-                    }
+                Err(e) => {
+                    println!("⚠️ Search task failed: {e}");
                 }
             }
         }

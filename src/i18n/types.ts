@@ -70,6 +70,10 @@ export interface MessageSchema {
         unknown: string
         noFiles: string
       }
+      player: {
+        title: string
+        close: string
+      }
       messages: {
         downloadStarted: string
         downloadFailed: string

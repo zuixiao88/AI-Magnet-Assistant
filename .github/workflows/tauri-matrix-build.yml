@@ -108,11 +108,7 @@ jobs:
           name: ai-magnet-assistant-${{ matrix.os }}
           if-no-files-found: warn
           retention-days: 7
-          path: |
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
-            src-tauri/target/release/bundle/**/*.dmg
-            src-tauri/target/release/bundle/**/*.app
+          path: src-tauri/target/release/bundle/portable/**/*.exe
 
       - name: Upload build logs on failure
         if: failure()

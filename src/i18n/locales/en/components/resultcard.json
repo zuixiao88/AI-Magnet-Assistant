@@ -8,7 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "playMagnet": "Local P2P playback",
+        "playMagnet": "Built-in magnet player",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -37,12 +37,16 @@
         "unknown": "Unknown",
         "noFiles": "No file list is available. Copy the magnet link into your downloader to inspect details."
       },
+      "player": {
+        "title": "Magnet Player",
+        "close": "Close player"
+      },
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
-        "playStarted": "Magnet link copied and local P2P player opened.",
-        "playStartedCopyFallback": "Local P2P player opened, but automatic copy failed; the player will still receive the magnet through the URL.",
-        "playFailed": "Failed to open local P2P player: {error}",
+        "playStarted": "Magnet link copied and built-in player opened.",
+        "playStartedCopyFallback": "Built-in player opened, but automatic copy failed; the player will still receive the magnet through the URL.",
+        "playFailed": "Failed to open built-in player: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }

@@ -13,6 +13,7 @@ interface Props {
   analysis?: any;
   isPriority?: boolean;
   fileList?: string[];
+  sourceEngine?: string;
   sourceUrl?: string;
   previewImageUrl?: string;
 }
@@ -31,6 +32,7 @@ const copied = ref(false);
 const quickDownloadEnabled = ref(true);
 const isDownloading = ref(false);
 const isPlaying = ref(false);
+const showPlayer = ref(false);
 const showContentPreview = ref(false);
 const previewImageFailed = ref(false);
 
@@ -61,6 +63,10 @@ const magnetHash = computed(() => {
 });
 const magnetDisplayName = computed(() => getMagnetParam('dn'));
 const trackerCount = computed(() => getMagnetParams('tr').length);
+const playerUrl = computed(() => {
+  if (!props.magnetLink) return '';
+  return `https://webtor.io/#${props.magnetLink}`;
+});
 
 // 计算剩余文件的tooltip内容
 const remainingFilesTooltip = computed(() => {
@@ -180,7 +186,7 @@ async function playMagnet(magnetLink: string | undefined) {
   isPlaying.value = true;
   try {
     const copiedToClipboard = await copyMagnetToClipboard(magnetLink, false);
-    await invoke("play_magnet_link", { magnetLink });
+    showPlayer.value = true;
     emit(
       'showNotification',
       copiedToClipboard
@@ -194,6 +200,10 @@ async function playMagnet(magnetLink: string | undefined) {
   } finally {
     isPlaying.value = false;
   }
+}
+
+function closePlayer() {
+  showPlayer.value = false;
 }
 
 </script>
@@ -216,10 +226,11 @@ async function playMagnet(magnetLink: string | undefined) {
             </button>
           </div>
         </div>
-        <div class="metadata-row" v-if="fileSize || uploadDate || analysis">
+        <div class="metadata-row" v-if="fileSize || uploadDate || sourceEngine || analysis">
           <div class="metadata-left">
             <span v-if="fileSize" class="file-size">📁 {{ fileSize }}</span>
             <span v-if="uploadDate" class="upload-date">📅 {{ uploadDate }}</span>
+            <span v-if="sourceEngine" class="source-engine">🔎 {{ sourceEngine }}</span>
             <span v-if="analysis && analysis.purity_score" class="purity-score">
               🎯 {{ $t('components.resultCard.analysis.score') }}: {{ analysis.purity_score }}
             </span>
@@ -371,6 +382,24 @@ async function playMagnet(magnetLink: string | undefined) {
         <div v-else class="preview-empty">
           {{ $t('components.resultCard.preview.noFiles') }}
         </div>
+      </div>
+    </div>
+
+    <div v-if="showPlayer" class="player-overlay" @click.self="closePlayer">
+      <div class="player-dialog">
+        <div class="player-header">
+          <div>
+            <h4>{{ $t('components.resultCard.player.title') }}</h4>
+            <p>{{ title }}</p>
+          </div>
+          <button class="player-close-btn" @click="closePlayer" :title="$t('components.resultCard.player.close')">×</button>
+        </div>
+        <iframe
+          class="player-frame"
+          :src="playerUrl"
+          allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
+          referrerpolicy="no-referrer"
+        ></iframe>
       </div>
     </div>
   </div>
@@ -552,12 +581,17 @@ async function playMagnet(magnetLink: string | undefined) {
   align-items: center;
 }
 
-.file-size, .upload-date, .purity-score {
+.file-size, .upload-date, .purity-score, .source-engine {
   display: flex;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.source-engine {
+  color: #475569;
+  font-weight: 600;
 }
 
 .purity-score {
@@ -976,6 +1010,76 @@ async function playMagnet(magnetLink: string | undefined) {
   font-style: italic;
 }
 
+.player-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.player-dialog {
+  width: min(1120px, 96vw);
+  height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #0f172a;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
+}
+
+.player-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #263449;
+  color: #e5eefb;
+}
+
+.player-header h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.player-header p {
+  margin: 4px 0 0;
+  max-width: 860px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9fb2ce;
+  font-size: 12px;
+}
+
+.player-close-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.player-close-btn:hover {
+  background: #1e293b;
+  color: white;
+}
+
+.player-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #020617;
+}
+
 /* 响应式设计 */
 @media (max-width: 1200px) {
   .card { padding: 12px; }
@@ -1009,6 +1113,9 @@ async function playMagnet(magnetLink: string | undefined) {
   .magnet-link code { font-size: 10px; }
   .metadata { font-size: 11px; }
   .preview-meta { grid-template-columns: 1fr; }
+  .player-overlay { padding: 10px; }
+  .player-dialog { width: 100%; height: 86vh; }
+  .player-header p { max-width: 240px; }
 }
 
 @media (max-width: 400px) {
