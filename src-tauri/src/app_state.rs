@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use uuid::Uuid;
 use crate::i18n::{ErrorCode, translate_error};
 
-const APP_DATA_VERSION: &str = "1.2.3";
+const APP_DATA_VERSION: &str = "1.2.4";
 
 /// 收藏项数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +123,12 @@ pub struct DownloadConfig {
     pub custom_app_path: Option<String>, // 自定义应用程序路径
     pub enable_quick_download: bool, // 是否启用快速下载按钮
     pub auto_close_page: bool, // 是否自动关闭下载页面
+    #[serde(default = "default_tracker_sources")]
+    pub tracker_sources: Vec<String>,
+    #[serde(default)]
+    pub tracker_servers: Vec<String>,
+    #[serde(default)]
+    pub tracker_last_updated: Option<String>,
 }
 
 impl Default for DownloadConfig {
@@ -131,8 +137,28 @@ impl Default for DownloadConfig {
             custom_app_path: None,
             enable_quick_download: true,
             auto_close_page: true,
+            tracker_sources: default_tracker_sources(),
+            tracker_servers: default_tracker_servers(),
+            tracker_last_updated: None,
         }
     }
+}
+
+pub fn default_tracker_sources() -> Vec<String> {
+    vec![
+        "http://github.itzmx.com/1265578519/OpenTracker/master/tracker.txt".to_string(),
+        "https://down.adysec.com/trackers_best.txt".to_string(),
+    ]
+}
+
+pub fn default_tracker_servers() -> Vec<String> {
+    vec![
+        "udp://tracker.opentrackr.org:1337/announce".to_string(),
+        "udp://open.stealth.si:80/announce".to_string(),
+        "udp://tracker.torrent.eu.org:451/announce".to_string(),
+        "udp://tracker.bittor.pw:1337/announce".to_string(),
+        "udp://public.popcorn-tracker.org:6969/announce".to_string(),
+    ]
 }
 
 /// 应用状态数据结构
@@ -203,7 +229,14 @@ fn default_search_engines() -> Vec<SearchEngine> {
         SearchEngine {
             id: "default_sehuatang".to_string(),
             name: "Sehuatang".to_string(),
-            url_template: "https://sehuatang.net/search.php?mod=forum&searchsubmit=yes&srchtxt={keyword}&page={page}".to_string(),
+            url_template: "https://sehuatang.net/forum-36-{page}.html".to_string(),
+            is_enabled: true,
+            is_deletable: true,
+        },
+        SearchEngine {
+            id: "default_671cy".to_string(),
+            name: "671cy".to_string(),
+            url_template: "https://www.671cy.com/forum-52-{page}.html".to_string(),
             is_enabled: true,
             is_deletable: true,
         },
@@ -214,19 +247,39 @@ fn migrate_app_data(data: &mut AppData) -> bool {
     let mut changed = false;
 
     for default_engine in default_search_engines() {
-        let exists = data
+        let existing = data
             .search_engines
             .iter()
-            .any(|engine| engine.id == default_engine.id || engine.name == default_engine.name);
+            .position(|engine| engine.id == default_engine.id || engine.name == default_engine.name);
 
-        if !exists {
-            data.search_engines.push(default_engine);
-            changed = true;
+        match existing {
+            Some(index) => {
+                let engine = &mut data.search_engines[index];
+                if engine.id == "default_sehuatang" && engine.url_template != default_engine.url_template {
+                    engine.url_template = default_engine.url_template;
+                    engine.is_enabled = true;
+                    changed = true;
+                }
+            }
+            None => {
+                data.search_engines.push(default_engine);
+                changed = true;
+            }
         }
     }
 
     if data.search_settings.max_pages < 3 {
         data.search_settings.max_pages = 3;
+        changed = true;
+    }
+
+    if data.download_config.tracker_sources.is_empty() {
+        data.download_config.tracker_sources = default_tracker_sources();
+        changed = true;
+    }
+
+    if data.download_config.tracker_servers.is_empty() {
+        data.download_config.tracker_servers = default_tracker_servers();
         changed = true;
     }
 
@@ -544,6 +597,17 @@ pub fn get_download_config(state: &AppState) -> DownloadConfig {
 pub fn update_download_config(state: &AppState, config: DownloadConfig) -> Result<()> {
     let mut data = state.lock().unwrap();
     data.download_config = config;
+    Ok(())
+}
+
+pub fn update_tracker_servers(
+    state: &AppState,
+    tracker_servers: Vec<String>,
+    tracker_last_updated: String,
+) -> Result<()> {
+    let mut data = state.lock().unwrap();
+    data.download_config.tracker_servers = tracker_servers;
+    data.download_config.tracker_last_updated = Some(tracker_last_updated);
     Ok(())
 }
 

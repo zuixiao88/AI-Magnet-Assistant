@@ -8,7 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "playMagnet": "Built-in magnet player",
+        "playMagnet": "Open local player",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -38,15 +38,15 @@
         "noFiles": "No file list is available. Copy the magnet link into your downloader to inspect details."
       },
       "player": {
-        "title": "Magnet Player",
+        "title": "Local Magnet Player",
         "close": "Close player"
       },
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
-        "playStarted": "Magnet link copied and built-in player opened.",
-        "playStartedCopyFallback": "Built-in player opened, but automatic copy failed; the player will still receive the magnet through the URL.",
-        "playFailed": "Failed to open built-in player: {error}",
+        "playStarted": "Magnet link copied and opened with the local magnet app.",
+        "playStartedCopyFallback": "Opened with the local magnet app. Automatic copy failed, but opening can still continue.",
+        "playFailed": "Failed to open the local magnet app: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }

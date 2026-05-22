@@ -113,6 +113,14 @@ pub struct SearchResult {
     pub tags: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+struct DiscuzThread {
+    title: String,
+    source_url: String,
+    file_size: Option<String>,
+    upload_date: Option<String>,
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct TorrentsCsvResponse {
     torrents: Vec<TorrentsCsvItem>,
@@ -443,7 +451,9 @@ impl SearchProvider for GenericProvider {
         let trimmed_html = html.trim_start();
 
         // JSON APIs are deterministic and do not need AI extraction.
-        let results = if trimmed_html.starts_with('{') || trimmed_html.starts_with('[') {
+        let results = if self.is_discuz_forum_template() {
+            self.parse_discuz_forum_results(&html, query).await?
+        } else if trimmed_html.starts_with('{') || trimmed_html.starts_with('[') {
             self.parse_json_results(&html)?
         } else if let Some(llm_client) = &self.llm_client {
             self.analyze_html_with_ai(&html, llm_client.clone()).await?
@@ -457,6 +467,191 @@ impl SearchProvider for GenericProvider {
 }
 
 impl GenericProvider {
+    fn is_discuz_forum_template(&self) -> bool {
+        let lower = self.url_template.to_ascii_lowercase();
+        lower.contains("forum-") && lower.ends_with(".html")
+    }
+
+    async fn parse_discuz_forum_results(&self, html: &str, query: &str) -> Result<Vec<SearchResult>> {
+        let threads = self.extract_discuz_threads(html, query);
+        if threads.is_empty() {
+            search_log!(warn, "{} forum page did not expose matching thread rows", self.name);
+            return Ok(Vec::new());
+        }
+
+        let futures = threads
+            .into_iter()
+            .take(12)
+            .map(|thread| async move { self.fetch_discuz_thread_result(thread).await });
+
+        let mut results = Vec::new();
+        for result in join_all(futures).await {
+            match result {
+                Ok(Some(search_result)) => results.push(search_result),
+                Ok(None) => {}
+                Err(error) => search_log!(warn, "{} detail fetch failed: {}", self.name, error),
+            }
+        }
+
+        let mut seen_magnets = HashSet::new();
+        results.retain(|result| seen_magnets.insert(result.magnet_link.clone()));
+        Ok(results)
+    }
+
+    fn extract_discuz_threads(&self, html: &str, query: &str) -> Vec<DiscuzThread> {
+        let document = Html::parse_document(html);
+        let row_selector = Selector::parse("tbody[id^=\"normalthread_\"]").ok();
+        let link_selector = Selector::parse("a.xst").ok();
+        let size_regex = regex::Regex::new(r"(?i)\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|TB)\b").ok();
+        let query_parts = query
+            .to_lowercase()
+            .split_whitespace()
+            .map(str::to_string)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+
+        let mut threads = Vec::new();
+        let mut seen_urls = HashSet::new();
+
+        if let (Some(row_selector), Some(link_selector)) = (row_selector, link_selector.as_ref()) {
+            for row in document.select(&row_selector) {
+                if let Some(link) = row.select(link_selector).next() {
+                    let Some(thread) = self.discuz_thread_from_link(&link, Some(&row), &query_parts, size_regex.as_ref()) else {
+                        continue;
+                    };
+
+                    if seen_urls.insert(thread.source_url.clone()) {
+                        threads.push(thread);
+                    }
+                }
+            }
+        }
+
+        if threads.is_empty() {
+            if let Some(link_selector) = link_selector {
+                for link in document.select(&link_selector) {
+                    let Some(thread) = self.discuz_thread_from_link(&link, None, &query_parts, size_regex.as_ref()) else {
+                        continue;
+                    };
+
+                    if seen_urls.insert(thread.source_url.clone()) {
+                        threads.push(thread);
+                    }
+                }
+            }
+        }
+
+        threads
+    }
+
+    fn discuz_thread_from_link(
+        &self,
+        link: &scraper::ElementRef,
+        row: Option<&scraper::ElementRef>,
+        query_parts: &[String],
+        size_regex: Option<&regex::Regex>,
+    ) -> Option<DiscuzThread> {
+        let href = link.value().attr("href")?;
+        if !href.contains("thread-") {
+            return None;
+        }
+
+        let title = clean_html_text(&link.text().collect::<String>());
+        if title.len() < 3 {
+            return None;
+        }
+
+        let searchable_title = title.to_lowercase();
+        if !query_parts.is_empty() && !query_parts.iter().all(|part| searchable_title.contains(part)) {
+            return None;
+        }
+
+        let row_text = row
+            .map(|row| clean_html_text(&row.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+        let file_size = size_regex
+            .and_then(|regex| regex.find(&row_text).map(|m| m.as_str().to_string()));
+        let upload_date = row_text
+            .split_whitespace()
+            .find(|part| self.is_date(part))
+            .map(ToString::to_string);
+
+        Some(DiscuzThread {
+            title,
+            source_url: self.normalize_source_url(href),
+            file_size,
+            upload_date,
+        })
+    }
+
+    async fn fetch_discuz_thread_result(&self, thread: DiscuzThread) -> Result<Option<SearchResult>> {
+        let response = self
+            .client
+            .get(&thread.source_url)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .header("Referer", self.extract_base_url_from_template().unwrap_or_else(|| thread.source_url.clone()))
+            .send()
+            .await
+            .map_err(|e| handle_request_error(&thread.source_url, e))?;
+
+        if !response.status().is_success() {
+            return Err(handle_http_status_error(&thread.source_url, &response));
+        }
+
+        let html = response.text().await?;
+        let decoded_html = decode_html_entities(&html);
+        let magnet_link = self
+            .extract_magnet_from_text(&decoded_html)
+            .or_else(|| self.extract_hash_from_text(&decoded_html).map(|hash| {
+                format!(
+                    "magnet:?xt=urn:btih:{}&dn={}",
+                    hash,
+                    urlencoding::encode(&thread.title)
+                )
+            }));
+
+        let Some(magnet_link) = magnet_link else {
+            return Ok(None);
+        };
+
+        let document = Html::parse_document(&html);
+        let preview_image_url = self.extract_preview_image_from_document(&document);
+        let file_list = generate_file_list_from_title(&thread.title);
+
+        Ok(Some(SearchResult {
+            title: thread.title,
+            magnet_link,
+            file_size: thread.file_size,
+            upload_date: thread.upload_date,
+            file_list,
+            source_engine: Some(self.name.clone()),
+            source_url: Some(thread.source_url),
+            preview_image_url,
+            score: None,
+            tags: None,
+        }))
+    }
+
+    fn extract_magnet_from_text(&self, text: &str) -> Option<String> {
+        let magnet_regex = regex::Regex::new(r#"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^"'<>\s]*"#).ok()?;
+        magnet_regex.find(text).map(|m| m.as_str().to_string())
+    }
+
+    fn extract_hash_from_text(&self, text: &str) -> Option<String> {
+        let hash_regex = regex::Regex::new(r"(?i)\b[a-f0-9]{40}\b").ok()?;
+        hash_regex.find(text).map(|m| m.as_str().to_uppercase())
+    }
+
+    fn extract_preview_image_from_document(&self, document: &Html) -> Option<String> {
+        let image_selector = Selector::parse("img").ok()?;
+        document
+            .select(&image_selector)
+            .filter_map(extract_image_source)
+            .find(|src| is_content_preview_image(src))
+            .map(|src| self.normalize_asset_url(src))
+    }
+
     fn parse_json_results(&self, content: &str) -> Result<Vec<SearchResult>> {
         if let Ok(response) = serde_json::from_str::<TorrentsCsvResponse>(content) {
             let results = response

@@ -277,6 +277,21 @@
           </button>
         </div>
 
+        <div class="form-group tracker-settings">
+          <label>{{ $t('pages.settings.download.trackers.title') }}</label>
+          <div class="tracker-meta">
+            <span>{{ $t('pages.settings.download.trackers.count', { count: downloadConfig.tracker_servers.length }) }}</span>
+            <span>{{ downloadConfig.tracker_last_updated || $t('pages.settings.download.trackers.neverUpdated') }}</span>
+          </div>
+          <div class="tracker-source-list">
+            <code v-for="source in downloadConfig.tracker_sources" :key="source">{{ source }}</code>
+          </div>
+          <small class="help-text">{{ $t('pages.settings.download.trackers.help') }}</small>
+          <button type="button" @click="refreshTrackers" :disabled="isRefreshingTrackers" class="save-btn-inline">
+            {{ isRefreshingTrackers ? $t('pages.settings.download.trackers.refreshing') : $t('pages.settings.download.trackers.refresh') }}
+          </button>
+        </div>
+
       </div>
     </div>
 
@@ -406,9 +421,13 @@ const downloadConfig = ref({
   custom_app_path: null as string | null,
   enable_quick_download: true,
   auto_close_page: true,
+  tracker_sources: [] as string[],
+  tracker_servers: [] as string[],
+  tracker_last_updated: null as string | null,
 });
 
 const isSavingDownload = ref(false);
+const isRefreshingTrackers = ref(false);
 
 onMounted(async () => {
   await loadLlmConfig();
@@ -446,8 +465,8 @@ watch(() => llmConfig.value.analysis_config.provider, (newProvider) => {
   } else if (newProvider === 'deepseek') {
     llmConfig.value.analysis_config.api_base = 'https://api.deepseek.com/v1';
     llmConfig.value.analysis_config.model = 'deepseek-chat';
-    if (!llmConfig.value.analysis_config.batch_size) {
-      llmConfig.value.analysis_config.batch_size = 5;
+    if (!llmConfig.value.analysis_config.batch_size || llmConfig.value.analysis_config.batch_size > 3) {
+      llmConfig.value.analysis_config.batch_size = 3;
     }
   }
 }); 
@@ -561,6 +580,20 @@ async function saveDownloadConfig() {
     showNotification(t('pages.settings.messages.downloadSettingsSaveFailed', { error: String(error) }), 'error');    
   } finally {
     isSavingDownload.value = false;
+  }
+}
+
+async function refreshTrackers() {
+  isRefreshingTrackers.value = true;
+  try {
+    const config = await invoke("refresh_tracker_servers");
+    downloadConfig.value = config as any;
+    showNotification(t('pages.settings.messages.trackersUpdated', { count: String(downloadConfig.value.tracker_servers.length) }));
+  } catch (error) {
+    logger.error("Failed to refresh trackers:", error);
+    showNotification(t('pages.settings.messages.trackersUpdateFailed', { error: String(error) }), 'error');
+  } finally {
+    isRefreshingTrackers.value = false;
   }
 }
 
@@ -1125,6 +1158,36 @@ function getTechStackList() {
 
 .checkbox-only:hover .checkmark {
   border-color: #3b82f6;
+}
+
+.tracker-settings {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.tracker-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #4a5568;
+  font-size: 13px;
+}
+
+.tracker-source-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tracker-source-list code {
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: white;
+  color: #2d3748;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 /* Checkbox with button layout */

@@ -422,7 +422,10 @@ async function analyzeResults() {
 
     const startTime = Date.now();
     const analysisModel = llmConfig.analysis_config?.model || "Unknown";
-    const batchSize = llmConfig.analysis_config?.batch_size || 5;
+    const configuredBatchSize = Number(llmConfig.analysis_config?.batch_size || 5);
+    const provider = String(llmConfig.analysis_config?.provider || '').toLowerCase();
+    const batchSize = Math.max(1, Math.min(configuredBatchSize || 5, provider === 'deepseek' ? 3 : 10));
+    const maxConcurrentBatches = provider === 'deepseek' ? 1 : 2;
 
     // 只分析尚未分析的结果
     const unanalyzedResults = results.value.filter((result: any) => !result.analysis);
@@ -437,21 +440,64 @@ async function analyzeResults() {
 
     let completedCount = alreadyAnalyzedCount;
     let hasErrors = false;
-    let errorMessages = [];
+    let errorMessages: string[] = [];
 
-    // 使用并行批量分析，所有批次同时发出
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const applyAnalysisResult = (result: any, analysis: any, batchIndex: number, itemIndex: number) => {
+      if (analysis && !analysis.error) {
+        result.analysis = {
+          title: analysis.title,
+          purity_score: analysis.purity_score,
+          tags: analysis.tags,
+        };
+
+        if (!result.originalTitle) {
+          result.originalTitle = result.title;
+        }
+        result.title = analysis.title;
+      } else {
+        const errorMsg = analysis?.error || 'No analysis result returned';
+        result.analysis = {
+          error: errorMsg,
+          title: result.title,
+          purity_score: 0,
+          tags: ['Analysis Failed']
+        };
+        hasErrors = true;
+        errorMessages.push(`Batch ${batchIndex + 1} item ${itemIndex + 1} failed: ${errorMsg}`);
+        logger.debug(`Set error for result "${result.title}": ${errorMsg}`);
+      }
+
+      completedCount++;
+      const errorCount = errorMessages.length;
+      const errorSuffix = errorCount > 0 ? `, ${errorCount} errors` : '';
+      searchStatus.value = t('pages.home.search.status.analyzingParallel', {
+        batches: Math.ceil(unanalyzedResults.length / batchSize),
+        completed: completedCount,
+        total: results.value.length,
+        errorSuffix,
+        model: analysisModel
+      });
+    };
+
+    // 使用受控并发。DeepSeek 对大量并发请求更敏感，过高并发会导致整批失败。
     try {
       const totalBatches = Math.ceil(unanalyzedResults.length / batchSize);
-      logger.debug(`Starting ${totalBatches} parallel batches with batch_size=${batchSize}`);
+      logger.debug(`Starting ${totalBatches} batches with batch_size=${batchSize}, concurrency=${maxConcurrentBatches}, provider=${provider || 'unknown'}`);
 
-      // 创建所有批次的Promise
-      const batchPromises = [];
+      const batches: Array<{ index: number; results: any[] }> = [];
       for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
         const startIdx = batchIndex * batchSize;
         const endIdx = Math.min(startIdx + batchSize, unanalyzedResults.length);
-        const batchResults = unanalyzedResults.slice(startIdx, endIdx);
+        batches.push({
+          index: batchIndex,
+          results: unanalyzedResults.slice(startIdx, endIdx),
+        });
+      }
 
-        const batchPromise = (async () => {
+      const processBatch = async (batch: { index: number; results: any[] }) => {
+        const batchIndex = batch.index;
+        const batchResults = batch.results;
           try {
             logger.debug(`Starting batch ${batchIndex + 1}/${totalBatches} with ${batchResults.length} items`);
 
@@ -464,47 +510,7 @@ async function analyzeResults() {
               for (let i = 0; i < batchResults.length; i++) {
                 const result = batchResults[i];
                 const analysis = analysisResults[i];
-
-                if (analysis && !analysis.error) {
-                  // 成功的分析结果
-                  result.analysis = {
-                    title: analysis.title,
-                    purity_score: analysis.purity_score,
-                    tags: analysis.tags,
-                  };
-
-                  // 保存原始标题用于tooltip显示
-                  if (!result.originalTitle) {
-                    result.originalTitle = result.title;
-                  }
-                  // 使用精简标题作为显示标题
-                  result.title = analysis.title;
-                } else {
-                  // 失败的分析结果或缺失的结果
-                  const errorMsg = analysis?.error || 'No analysis result returned';
-                  result.analysis = {
-                    error: errorMsg,
-                    title: result.title, // 保持原标题
-                    purity_score: 0,
-                    tags: ['Analysis Failed']
-                  };
-                  hasErrors = true;
-                  errorMessages.push(`Batch ${batchIndex + 1} item ${i + 1} failed: ${errorMsg}`);
-                  logger.debug(`Set error for result "${result.title}": ${errorMsg}`);
-                }
-
-                completedCount++;
-
-                // 实时更新状态
-                const errorCount = errorMessages.length;
-                const errorSuffix = errorCount > 0 ? `, ${errorCount} errors` : '';
-                searchStatus.value = t('pages.home.search.status.analyzingParallel', { 
-                  batches: totalBatches,
-                  completed: completedCount,
-                  total: results.value.length,
-                  errorSuffix,
-                  model: analysisModel 
-                });
+                applyAnalysisResult(result, analysis, batchIndex, i);
               }
 
               logger.debug(`Batch ${batchIndex + 1}/${totalBatches} completed: ${analysisResults.length} results processed`);
@@ -514,12 +520,13 @@ async function analyzeResults() {
               throw new Error('Batch analysis returned invalid result format');
             }
           } catch (batchError) {
-            logger.error(`Batch ${batchIndex + 1} failed, falling back to individual analysis:`, batchError);
+            logger.error(`Batch ${batchIndex + 1} failed, falling back to sequential individual analysis:`, batchError);
             hasErrors = true;
             errorMessages.push(`Batch ${batchIndex + 1} failed: ${batchError}`);
 
-            // 对这个批次回退到单个分析（并行）
-            const individualPromises = batchResults.map(async (result: any) => {
+            // 对这个批次回退到单个分析。这里必须顺序执行，避免失败后继续放大限流。
+            for (let i = 0; i < batchResults.length; i++) {
+              const result = batchResults[i];
               try {
                 const analysisConfig = {
                   provider: llmConfig.analysis_config.provider,
@@ -528,6 +535,10 @@ async function analyzeResults() {
                   model: llmConfig.analysis_config.model,
                   batch_size: llmConfig.analysis_config.batch_size,
                 };
+
+                if (provider === 'deepseek') {
+                  await sleep(700);
+                }
 
                 const rawAnalysis = await invoke('analyze_resource', {
                   result: result,
@@ -546,17 +557,7 @@ async function analyzeResults() {
                   analysis = { error: `Failed to parse analysis: ${e}` };
                 }
 
-                result.analysis = analysis;
-                if (analysis && analysis.title && !analysis.error) {
-                  if (!result.originalTitle) {
-                    result.originalTitle = result.title;
-                  }
-                  result.title = analysis.title;
-                } else if (analysis && analysis.error) {
-                  logger.debug(`Set parse error for result "${result.title}": ${analysis.error}`);
-                }
-
-                completedCount++;
+                applyAnalysisResult(result, analysis, batchIndex, i);
                 const errorCount = errorMessages.length;
                 const errorSuffix = errorCount > 0 ? `, ${errorCount} errors` : '';
                 searchStatus.value = t('pages.home.search.status.individualFallback', { 
@@ -589,24 +590,30 @@ async function analyzeResults() {
                   model: analysisModel 
                 });
               }
-            });
-
-            await Promise.all(individualPromises);
+            }
             return { success: false, batchIndex: batchIndex + 1, error: batchError };
           }
-        })();
+      };
 
-        batchPromises.push(batchPromise);
-      }
-
-      // 等待所有批次完成
       searchStatus.value = t('pages.home.search.status.batchAnalysis', { 
         batches: totalBatches,
         completed: alreadyAnalyzedCount,
         total: results.value.length,
         model: analysisModel 
       });
-      const batchResults = await Promise.all(batchPromises);
+
+      const batchResults: any[] = [];
+      let nextBatchIndex = 0;
+      const workers = Array.from({ length: Math.min(maxConcurrentBatches, batches.length) }, async () => {
+        while (nextBatchIndex < batches.length) {
+          const batch = batches[nextBatchIndex++];
+          batchResults.push(await processBatch(batch));
+          if (provider === 'deepseek') {
+            await sleep(600);
+          }
+        }
+      });
+      await Promise.all(workers);
 
       const successfulBatches = batchResults.filter((r: any) => r && r.success).length;
       const failedBatches = batchResults.filter((r: any) => r && !r.success).length;

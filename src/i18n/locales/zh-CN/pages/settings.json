@@ -33,12 +33,12 @@
           "test": "测试",
           "testing": "测试中...",
           "helpText": "您的API密钥安全存储，仅用于AI分析",
-          "batchSizeHelp": "单次API调用中分析的搜索结果数量（1-20）。较低的值更快，但可能因更频繁的请求而遇到速率限制。",
+          "batchSizeHelp": "单次API调用中分析的搜索结果数量（1-20）。DeepSeek 会自动限制为最多 3 条，避免高并发导致整批失败。",
           "placeholders": {
             "apiKey": "输入您的API密钥...",
             "apiBase": "例如：https://generativelanguage.googleapis.com",
             "model": "例如：gemini-2.5-flash-lite",
-            "batchSize": "5"
+            "batchSize": "3"
           }
         },
         "rateLimit": {
@@ -68,6 +68,14 @@
         "autoClosePageHelp": "10秒后自动关闭下载页面",
         "enableQuickDownload": "启用快速下载按钮",
         "enableQuickDownloadHelp": "在搜索结果中每个磁力链接旁边显示快速下载按钮",
+        "trackers": {
+          "title": "Tracker 服务器",
+          "count": "当前 {count} 个 tracker",
+          "neverUpdated": "尚未更新",
+          "help": "用于调用迅雷/本地磁力程序时补充 tracker，提高连接成功率。每天会从内置来源更新一次。",
+          "refresh": "立即更新 tracker",
+          "refreshing": "更新中..."
+        },
         "save": "保存下载设置",
         "saving": "保存中..."   
       },
@@ -121,6 +129,8 @@
         "downloadSettingsSaved": "下载设置保存成功！",
         "downloadSettingsSaveFailed": "下载设置保存失败：{error}",
         "loadDownloadConfigFailed": "加载下载配置失败：{error}",
+        "trackersUpdated": "Tracker 已更新，共 {count} 个。",
+        "trackersUpdateFailed": "Tracker 更新失败：{error}",
         "browseFileFailed": "浏览文件失败：{error}",
         "openFolderFailed": "无法打开文件夹：{error}",
         "testConnectionSuccess": "{type} 连接成功：{result}",

@@ -72,6 +72,32 @@ fn api_error_message(status: StatusCode, error_body: &str) -> String {
     }
 }
 
+fn extract_json_object(text: &str) -> Result<String> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    if cleaned.starts_with('{') && cleaned.ends_with('}') {
+        return Ok(cleaned.to_string());
+    }
+
+    let start = cleaned
+        .find('{')
+        .ok_or_else(|| anyhow::anyhow!("AI响应中未找到JSON对象"))?;
+    let end = cleaned
+        .rfind('}')
+        .ok_or_else(|| anyhow::anyhow!("AI响应中未找到JSON对象结束位置"))?;
+
+    if start >= end {
+        return Err(anyhow::anyhow!("AI响应JSON对象范围无效"));
+    }
+
+    Ok(cleaned[start..=end].to_string())
+}
+
 // --- 0. 公共配置 ---
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -404,7 +430,7 @@ impl GeminiClient {
         );
 
         let text = self.generate_text(config, &prompt).await?;
-        let cleaned_text = text.trim().replace("```json", "").replace("```", "");
+        let cleaned_text = extract_json_object(&text)?;
         let result: BatchExtractBasicInfoResult = serde_json::from_str(&cleaned_text)
             .map_err(|e| {
                 eprintln!("第一阶段JSON解析失败: {e}");
@@ -567,7 +593,7 @@ impl GeminiClient {
         // println!("[BATCH AI PROMPT] 批量分析prompt:\n---\n{}\n---", prompt);
 
         let text = self.generate_text(config, &prompt).await?;
-        let cleaned_text = text.trim().replace("```json", "").replace("```", "");
+        let cleaned_text = extract_json_object(&text)?;
 
         #[derive(Deserialize)]
         struct BatchAnalysisResponse {

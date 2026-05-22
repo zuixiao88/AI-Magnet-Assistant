@@ -32,7 +32,6 @@ const copied = ref(false);
 const quickDownloadEnabled = ref(true);
 const isDownloading = ref(false);
 const isPlaying = ref(false);
-const showPlayer = ref(false);
 const showContentPreview = ref(false);
 const previewImageFailed = ref(false);
 
@@ -63,10 +62,6 @@ const magnetHash = computed(() => {
 });
 const magnetDisplayName = computed(() => getMagnetParam('dn'));
 const trackerCount = computed(() => getMagnetParams('tr').length);
-const playerUrl = computed(() => {
-  if (!props.magnetLink) return '';
-  return `https://webtor.io/#${props.magnetLink}`;
-});
 
 // 计算剩余文件的tooltip内容
 const remainingFilesTooltip = computed(() => {
@@ -186,7 +181,7 @@ async function playMagnet(magnetLink: string | undefined) {
   isPlaying.value = true;
   try {
     const copiedToClipboard = await copyMagnetToClipboard(magnetLink, false);
-    showPlayer.value = true;
+    await invoke("play_magnet_link", { magnetLink });
     emit(
       'showNotification',
       copiedToClipboard
@@ -200,10 +195,6 @@ async function playMagnet(magnetLink: string | undefined) {
   } finally {
     isPlaying.value = false;
   }
-}
-
-function closePlayer() {
-  showPlayer.value = false;
 }
 
 </script>
@@ -382,24 +373,6 @@ function closePlayer() {
         <div v-else class="preview-empty">
           {{ $t('components.resultCard.preview.noFiles') }}
         </div>
-      </div>
-    </div>
-
-    <div v-if="showPlayer" class="player-overlay" @click.self="closePlayer">
-      <div class="player-dialog">
-        <div class="player-header">
-          <div>
-            <h4>{{ $t('components.resultCard.player.title') }}</h4>
-            <p>{{ title }}</p>
-          </div>
-          <button class="player-close-btn" @click="closePlayer" :title="$t('components.resultCard.player.close')">×</button>
-        </div>
-        <iframe
-          class="player-frame"
-          :src="playerUrl"
-          allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
-          referrerpolicy="no-referrer"
-        ></iframe>
       </div>
     </div>
   </div>
@@ -1010,76 +983,6 @@ function closePlayer() {
   font-style: italic;
 }
 
-.player-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, 0.72);
-}
-
-.player-dialog {
-  width: min(1120px, 96vw);
-  height: min(760px, 88vh);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #0f172a;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
-}
-
-.player-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  border-bottom: 1px solid #263449;
-  color: #e5eefb;
-}
-
-.player-header h4 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.player-header p {
-  margin: 4px 0 0;
-  max-width: 860px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #9fb2ce;
-  font-size: 12px;
-}
-
-.player-close-btn {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: #cbd5e1;
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.player-close-btn:hover {
-  background: #1e293b;
-  color: white;
-}
-
-.player-frame {
-  flex: 1;
-  width: 100%;
-  border: none;
-  background: #020617;
-}
-
 /* 响应式设计 */
 @media (max-width: 1200px) {
   .card { padding: 12px; }
@@ -1113,9 +1016,6 @@ function closePlayer() {
   .magnet-link code { font-size: 10px; }
   .metadata { font-size: 11px; }
   .preview-meta { grid-template-columns: 1fr; }
-  .player-overlay { padding: 10px; }
-  .player-dialog { width: 100%; height: 86vh; }
-  .player-header p { max-width: 240px; }
 }
 
 @media (max-width: 400px) {

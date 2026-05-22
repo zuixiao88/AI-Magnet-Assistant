@@ -11,6 +11,7 @@ mod i18n;
 use tauri::Manager;
 use regex::Regex;
 use searcher::SearchCore;
+use std::collections::HashSet;
 
 // ============ 辅助函数 ============
 
@@ -652,6 +653,21 @@ async fn update_download_config(
 }
 
 #[tauri::command]
+async fn refresh_tracker_servers(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, app_state::AppState>,
+) -> Result<app_state::DownloadConfig, String> {
+    let config = app_state::get_download_config(&state);
+    let trackers = fetch_tracker_servers(&config.tracker_sources).await?;
+
+    app_state::update_tracker_servers(&state, trackers, chrono::Utc::now().to_rfc3339())
+        .map_err(|e| e.to_string())?;
+    app_state::save_app_state(&app_handle, &state).map_err(|e| e.to_string())?;
+
+    Ok(app_state::get_download_config(&state))
+}
+
+#[tauri::command]
 async fn open_magnet_link(
     state: tauri::State<'_, app_state::AppState>,
     magnet_link: String,
@@ -675,6 +691,143 @@ async fn open_magnet_link(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn play_magnet_link(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, app_state::AppState>,
+    magnet_link: String,
+) -> Result<(), String> {
+    if !magnet_link.starts_with("magnet:?") {
+        return Err("Invalid magnet link.".to_string());
+    }
+
+    let config = ensure_daily_tracker_update(&app_handle, &state).await?;
+    let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
+
+    if let Some(ref app_path) = config.custom_app_path {
+        open_magnet_with_app(&enhanced_magnet, app_path)?;
+    } else {
+        open_magnet_with_default_app(&enhanced_magnet)?;
+    }
+
+    Ok(())
+}
+
+async fn ensure_daily_tracker_update(
+    app_handle: &tauri::AppHandle,
+    state: &tauri::State<'_, app_state::AppState>,
+) -> Result<app_state::DownloadConfig, String> {
+    let app_state = state.inner();
+    let config = app_state::get_download_config(app_state);
+
+    if !tracker_update_due(config.tracker_last_updated.as_deref()) {
+        return Ok(config);
+    }
+
+    match fetch_tracker_servers(&config.tracker_sources).await {
+        Ok(trackers) => {
+            app_state::update_tracker_servers(app_state, trackers, chrono::Utc::now().to_rfc3339())
+                .map_err(|e| e.to_string())?;
+            app_state::save_app_state(app_handle, app_state).map_err(|e| e.to_string())?;
+            Ok(app_state::get_download_config(app_state))
+        }
+        Err(error) => {
+            eprintln!("Failed to update tracker servers, using cached list: {error}");
+            Ok(config)
+        }
+    }
+}
+
+fn tracker_update_due(last_updated: Option<&str>) -> bool {
+    let Some(last_updated) = last_updated else {
+        return true;
+    };
+
+    let Ok(last_updated) = chrono::DateTime::parse_from_rfc3339(last_updated) else {
+        return true;
+    };
+
+    chrono::Utc::now()
+        .signed_duration_since(last_updated.with_timezone(&chrono::Utc))
+        .num_hours()
+        >= 24
+}
+
+async fn fetch_tracker_servers(sources: &[String]) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("AI-Magnet-Assistant/1.2.0")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let mut trackers = app_state::default_tracker_servers();
+    let mut seen: HashSet<String> = trackers.iter().cloned().collect();
+    let mut errors = Vec::new();
+
+    for source in sources {
+        match client.get(source).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.text().await {
+                    Ok(text) => {
+                        for tracker in parse_tracker_list(&text) {
+                            if seen.insert(tracker.clone()) {
+                                trackers.push(tracker);
+                            }
+                        }
+                    }
+                    Err(error) => errors.push(format!("{source}: {error}")),
+                },
+                Err(error) => errors.push(format!("{source}: {error}")),
+            },
+            Err(error) => errors.push(format!("{source}: {error}")),
+        }
+    }
+
+    if trackers.len() == app_state::default_tracker_servers().len() && !errors.is_empty() {
+        return Err(format!("Failed to fetch tracker sources: {}", errors.join("; ")));
+    }
+
+    trackers.truncate(300);
+    Ok(trackers)
+}
+
+fn parse_tracker_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.starts_with("udp://")
+                || lower.starts_with("http://")
+                || lower.starts_with("https://")
+                || lower.starts_with("ws://")
+                || lower.starts_with("wss://")
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn append_trackers_to_magnet(magnet_link: &str, trackers: &[String]) -> String {
+    let mut result = magnet_link.to_string();
+    let existing = magnet_link.to_ascii_lowercase();
+
+    for tracker in trackers {
+        if tracker.trim().is_empty() {
+            continue;
+        }
+
+        let encoded_tracker = urlencoding::encode(tracker);
+        if existing.contains(&format!("tr={}", encoded_tracker).to_ascii_lowercase()) {
+            continue;
+        }
+
+        result.push_str("&tr=");
+        result.push_str(&encoded_tracker);
+    }
+
+    result
 }
 
 fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
@@ -1026,6 +1179,12 @@ fn main() {
                 .expect("Failed to initialize app state");
             app.manage(app_state);
 
+            let tracker_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = tracker_app_handle.state::<app_state::AppState>();
+                let _ = ensure_daily_tracker_update(&tracker_app_handle, &state).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1061,7 +1220,9 @@ fn main() {
             // 下载配置命令
             get_download_config,
             update_download_config,
+            refresh_tracker_servers,
             open_magnet_link,
+            play_magnet_link,
             browse_for_file,
             // 国际化命令
             i18n::get_system_locale,
