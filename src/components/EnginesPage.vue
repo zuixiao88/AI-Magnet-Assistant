@@ -309,6 +309,33 @@ function handleInput(e: Event) {
   input.setCustomValidity('')
 }
 
+function isForumListTemplate(urlTemplate: string): boolean {
+  return /\/forum-\d+-(?:\{page\}|\{page-1\}|\d+)\.html(?:$|[?#])/i.test(urlTemplate);
+}
+
+function normalizeEngineTemplateInput(urlTemplate: string): string {
+  const trimmed = urlTemplate.trim();
+  return trimmed.replace(/(\/forum-\d+-)\d+(\.html(?:$|[?#]))/i, `$1${L}page${R}$2`);
+}
+
+function validateEngineTemplate(urlTemplate: string): boolean {
+  if (isForumListTemplate(urlTemplate)) {
+    return true;
+  }
+
+  if (!urlTemplate.includes('{keyword}')) {
+    showNotification(t('pages.engines.add.validation.keywordRequired'), 'error');
+    return false;
+  }
+
+  if (!urlTemplate.includes('{page}') && !urlTemplate.includes('{page-1}')) {
+    showNotification(t('pages.engines.add.validation.pageRequired'), 'error');
+    return false;
+  }
+
+  return true;
+}
+
 onMounted(() => {
   loadEngines();
 });
@@ -350,14 +377,8 @@ async function addEngine() {
       return;
     }
 
-    // Validate template format
-    if (!newEngine.value.urlTemplate.includes('{keyword}')) {
-      showNotification(t('pages.engines.add.validation.keywordRequired'), 'error');
-      return;
-    }
-
-    if (!newEngine.value.urlTemplate.includes('{page}') && !newEngine.value.urlTemplate.includes('{page-1}')) {
-      showNotification(t('pages.engines.add.validation.pageRequired'), 'error');
+    newEngine.value.urlTemplate = normalizeEngineTemplateInput(newEngine.value.urlTemplate);
+    if (!validateEngineTemplate(newEngine.value.urlTemplate)) {
       return;
     }
   } else {
@@ -373,10 +394,10 @@ async function addEngine() {
 
     if (addEngineMode.value === 'advanced') {
       // Use the template directly
-      urlTemplate = newEngine.value.urlTemplate;
+      urlTemplate = normalizeEngineTemplateInput(newEngine.value.urlTemplate);
     } else {
       // Generate URL template from examples
-      urlTemplate = generateUrlTemplate(newEngine.value.urlExample1, newEngine.value.urlExample2);
+      urlTemplate = normalizeEngineTemplateInput(generateUrlTemplate(newEngine.value.urlExample1, newEngine.value.urlExample2));
     }
 
     await invoke("add_search_engine", {
@@ -634,14 +655,8 @@ async function saveEditEngine() {
     return;
   }
 
-  // Validate template format
-  if (!editingEngine.value.url_template.includes('{keyword}')) {
-    showNotification(t('pages.engines.add.validation.keywordRequired'), 'error');
-    return;
-  }
-
-  if (!editingEngine.value.url_template.includes('{page}') && !editingEngine.value.url_template.includes('{page-1}')) {
-    showNotification(t('pages.engines.add.validation.pageRequired'), 'error');
+  editingEngine.value.url_template = normalizeEngineTemplateInput(editingEngine.value.url_template);
+  if (!validateEngineTemplate(editingEngine.value.url_template)) {
     return;
   }
 

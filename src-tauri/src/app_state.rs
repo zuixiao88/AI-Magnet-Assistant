@@ -255,7 +255,9 @@ fn migrate_app_data(data: &mut AppData) -> bool {
         match existing {
             Some(index) => {
                 let engine = &mut data.search_engines[index];
-                if engine.id == "default_sehuatang" && engine.url_template != default_engine.url_template {
+                let should_refresh_forum_engine =
+                    engine.id == "default_sehuatang" || engine.id == "default_671cy";
+                if should_refresh_forum_engine && engine.url_template != default_engine.url_template {
                     engine.url_template = default_engine.url_template;
                     engine.is_enabled = true;
                     changed = true;
