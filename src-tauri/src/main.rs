@@ -12,6 +12,9 @@ use tauri::Manager;
 use regex::Regex;
 use searcher::SearchCore;
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 // ============ 辅助函数 ============
 
@@ -715,6 +718,105 @@ async fn play_magnet_link(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct BuiltinPlayerSession {
+    base_url: String,
+    info_hash: String,
+}
+
+#[derive(serde::Serialize)]
+struct BuiltinPlayerFile {
+    name: String,
+    url: String,
+    length: Option<u64>,
+    media_type: String,
+}
+
+#[derive(serde::Serialize)]
+struct BuiltinPlayerStats {
+    progress: Option<f64>,
+    download_speed: Option<u64>,
+    peers: Option<u64>,
+}
+
+#[tauri::command]
+async fn start_builtin_magnet_player(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, app_state::AppState>,
+    magnet_link: String,
+) -> Result<BuiltinPlayerSession, String> {
+    if !magnet_link.starts_with("magnet:?") {
+        return Err("Invalid magnet link.".to_string());
+    }
+
+    let info_hash = extract_magnet_info_hash(&magnet_link)?;
+    let config = ensure_daily_tracker_update(&app_handle, &state).await?;
+    let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
+
+    ensure_rqbit_server(&app_handle).await?;
+    add_magnet_to_rqbit(&enhanced_magnet).await?;
+
+    Ok(BuiltinPlayerSession {
+        base_url: rqbit_base_url(),
+        info_hash,
+    })
+}
+
+#[tauri::command]
+async fn get_builtin_magnet_playlist(info_hash: String) -> Result<Vec<BuiltinPlayerFile>, String> {
+    let playlist_url = format!("{}/torrents/{}/playlist", rqbit_base_url(), info_hash);
+    let response = reqwest::Client::new()
+        .get(&playlist_url)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to request rqbit playlist: {e}"))?;
+
+    if !response.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read rqbit playlist: {e}"))?;
+
+    Ok(parse_rqbit_playlist(&body, &rqbit_base_url()))
+}
+
+#[tauri::command]
+async fn get_builtin_magnet_stats(info_hash: String) -> Result<BuiltinPlayerStats, String> {
+    let stats_url = format!("{}/torrents/{}/stats/v1", rqbit_base_url(), info_hash);
+    let response = reqwest::Client::new()
+        .get(&stats_url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to request rqbit stats: {e}"))?;
+
+    if !response.status().is_success() {
+        return Ok(BuiltinPlayerStats {
+            progress: None,
+            download_speed: None,
+            peers: None,
+        });
+    }
+
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to parse rqbit stats: {e}"))?;
+
+    Ok(BuiltinPlayerStats {
+        progress: find_numeric_field(&value, &["progress", "finished_percentage", "downloaded_percent"])
+            .map(normalize_progress),
+        download_speed: find_numeric_field(&value, &["download_speed", "download_speed_bytes", "downloaded_and_checked_bytes_per_second"])
+            .map(|value| value.max(0.0) as u64),
+        peers: find_numeric_field(&value, &["live", "peers", "num_peers", "connected_peers"])
+            .map(|value| value.max(0.0) as u64),
+    })
+}
+
 async fn ensure_daily_tracker_update(
     app_handle: &tauri::AppHandle,
     state: &tauri::State<'_, app_state::AppState>,
@@ -828,6 +930,238 @@ fn append_trackers_to_magnet(magnet_link: &str, trackers: &[String]) -> String {
     }
 
     result
+}
+
+fn rqbit_base_url() -> String {
+    "http://127.0.0.1:3030".to_string()
+}
+
+fn extract_magnet_info_hash(magnet_link: &str) -> Result<String, String> {
+    let re = Regex::new(r"(?i)(?:xt=urn:btih:|btih:)([a-z0-9]{32,40})")
+        .map_err(|e| format!("Failed to compile info hash parser: {e}"))?;
+
+    re.captures(magnet_link)
+        .and_then(|captures| captures.get(1))
+        .map(|capture| capture.as_str().to_ascii_uppercase())
+        .ok_or_else(|| "Magnet link does not contain a BTIH info hash.".to_string())
+}
+
+async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    if rqbit_server_ready().await {
+        return Ok(());
+    }
+
+    let executable = find_rqbit_executable(app_handle).ok_or_else(|| {
+        "找不到本地 rqbit 播放引擎。请将 rqbit.exe 放到程序同目录，或设置 RQBIT_PATH 指向 rqbit 可执行文件。".to_string()
+    })?;
+
+    let download_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?
+        .join("rqbit-downloads");
+
+    std::fs::create_dir_all(&download_dir)
+        .map_err(|e| format!("Failed to create rqbit download directory: {e}"))?;
+
+    Command::new(executable)
+        .args(["server", "start"])
+        .arg(download_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start rqbit player engine: {e}"))?;
+
+    for _ in 0..30 {
+        if rqbit_server_ready().await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    Err("rqbit 播放引擎已启动但未在 127.0.0.1:3030 响应。".to_string())
+}
+
+async fn rqbit_server_ready() -> bool {
+    reqwest::Client::new()
+        .get(rqbit_base_url())
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
+}
+
+fn find_rqbit_executable(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("RQBIT_PATH") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let exe_names = if cfg!(target_os = "windows") {
+        vec!["rqbit.exe"]
+    } else {
+        vec!["rqbit"]
+    };
+
+    let mut candidate_dirs = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            candidate_dirs.push(parent.to_path_buf());
+        }
+    }
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidate_dirs.push(resource_dir);
+    }
+
+    for dir in candidate_dirs {
+        for exe_name in &exe_names {
+            let candidate = dir.join(exe_name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Some(extracted) = extract_bundled_rqbit(app_handle) {
+        return Some(extracted);
+    }
+
+    Some(PathBuf::from(exe_names[0]))
+}
+
+#[cfg(target_os = "windows")]
+fn extract_bundled_rqbit(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    const RQBIT_BYTES: &[u8] = include_bytes!("../binaries/rqbit-x86_64-pc-windows-msvc.exe");
+
+    let engine_dir = app_handle
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("player-engine");
+    let engine_path = engine_dir.join("rqbit.exe");
+
+    std::fs::create_dir_all(&engine_dir).ok()?;
+
+    let should_write = std::fs::metadata(&engine_path)
+        .map(|metadata| metadata.len() != RQBIT_BYTES.len() as u64)
+        .unwrap_or(true);
+
+    if should_write {
+        std::fs::write(&engine_path, RQBIT_BYTES).ok()?;
+    }
+
+    Some(engine_path)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn extract_bundled_rqbit(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    None
+}
+
+async fn add_magnet_to_rqbit(magnet_link: &str) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .post(format!("{}/torrents", rqbit_base_url()))
+        .query(&[("overwrite", "false")])
+        .body(magnet_link.to_string())
+        .timeout(Duration::from_secs(12))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to add magnet to rqbit: {e}"))?;
+
+    if response.status().is_success() || response.status().as_u16() == 409 {
+        return Ok(());
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(format!("rqbit rejected the magnet link: HTTP {status} {body}"))
+}
+
+fn parse_rqbit_playlist(body: &str, base_url: &str) -> Vec<BuiltinPlayerFile> {
+    let mut files = Vec::new();
+    let mut current_name: Option<String> = None;
+
+    for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.starts_with("#EXTINF") {
+            current_name = line
+                .split_once(',')
+                .map(|(_, name)| name.trim().to_string())
+                .filter(|name| !name.is_empty());
+            continue;
+        }
+
+        if line.starts_with('#') {
+            continue;
+        }
+
+        let url = if line.starts_with("http://") || line.starts_with("https://") {
+            line.to_string()
+        } else if line.starts_with('/') {
+            format!("{base_url}{line}")
+        } else {
+            format!("{base_url}/{line}")
+        };
+
+        let fallback_name = url
+            .rsplit('/')
+            .next()
+            .and_then(|part| part.split('?').next())
+            .filter(|part| !part.is_empty())
+            .unwrap_or("media")
+            .to_string();
+        let name = current_name.take().unwrap_or(fallback_name);
+
+        files.push(BuiltinPlayerFile {
+            media_type: infer_media_type(&name),
+            name,
+            url,
+            length: None,
+        });
+    }
+
+    files
+}
+
+fn infer_media_type(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".mp3")
+        || lower.ends_with(".ogg")
+        || lower.ends_with(".wav")
+        || lower.ends_with(".flac")
+        || lower.ends_with(".aac")
+        || lower.ends_with(".m4a")
+    {
+        "audio".to_string()
+    } else {
+        "video".to_string()
+    }
+}
+
+fn normalize_progress(value: f64) -> f64 {
+    if value > 1.0 {
+        (value / 100.0).clamp(0.0, 1.0)
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
+fn find_numeric_field(value: &serde_json::Value, names: &[&str]) -> Option<f64> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for name in names {
+                if let Some(number) = map.get(*name).and_then(serde_json::Value::as_f64) {
+                    return Some(number);
+                }
+            }
+            map.values().find_map(|child| find_numeric_field(child, names))
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(|child| find_numeric_field(child, names)),
+        _ => None,
+    }
 }
 
 fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
@@ -1223,6 +1557,9 @@ fn main() {
             refresh_tracker_servers,
             open_magnet_link,
             play_magnet_link,
+            start_builtin_magnet_player,
+            get_builtin_magnet_playlist,
+            get_builtin_magnet_stats,
             browse_for_file,
             // 国际化命令
             i18n::get_system_locale,

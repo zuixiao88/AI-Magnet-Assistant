@@ -8,7 +8,7 @@
         "copyMagnetLink": "Copy magnet link",
         "copied": "Copied!",
         "quickDownload": "Quick download",
-        "playMagnet": "Open local player",
+        "playMagnet": "Built-in magnet player",
         "opening": "Opening...",
         "previewContent": "Preview magnet content"
       },
@@ -38,15 +38,34 @@
         "noFiles": "No file list is available. Copy the magnet link into your downloader to inspect details."
       },
       "player": {
-        "title": "Local Magnet Player",
-        "close": "Close player"
+        "title": "Built-in Magnet Player",
+        "close": "Close player",
+        "files": "Files",
+        "stats": {
+          "progress": "Progress",
+          "speed": "Speed",
+          "peers": "Peers"
+        },
+        "status": {
+          "loadingEngine": "Loading player engine...",
+          "connecting": "Connecting to peers...",
+          "loaded": "Loaded: {name}",
+          "preparing": "Preparing playback...",
+          "playing": "Playing",
+          "renderFailed": "This file cannot be played in the built-in player: {error}",
+          "engineError": "Player engine error: {error}",
+          "startFailed": "Failed to start built-in player: {error}",
+          "localEngineHint": "The built-in player uses the local rqbit BT engine. First playback may wait for metadata and peers; if rqbit is missing, place rqbit.exe next to the app or set RQBIT_PATH.",
+          "noPlayableFile": "No browser-playable media file was found. Select another file from the list if available.",
+          "noFiles": "No file list is available yet. Waiting for magnet metadata."
+        }
       },
       "messages": {
         "downloadStarted": "Download started successfully!",
         "downloadFailed": "Failed to start download: {error}",
-        "playStarted": "Magnet link copied and opened with the local magnet app.",
-        "playStartedCopyFallback": "Opened with the local magnet app. Automatic copy failed, but opening can still continue.",
-        "playFailed": "Failed to open the local magnet app: {error}",
+        "playStarted": "Magnet link copied and built-in player opened.",
+        "playStartedCopyFallback": "Built-in player opened. Automatic copy failed, but playback can still continue.",
+        "playFailed": "Failed to open built-in player: {error}",
         "copyFailed": "Copy failed. Select the magnet link and copy it manually."
       }
     }

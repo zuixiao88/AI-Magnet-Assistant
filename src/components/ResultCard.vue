@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from '../composables/useI18n';
 import { logger } from '../utils/logger';
+import MagnetPlayerModal from './MagnetPlayerModal.vue';
 
 interface Props {
   title?: string;
@@ -32,6 +33,7 @@ const copied = ref(false);
 const quickDownloadEnabled = ref(true);
 const isDownloading = ref(false);
 const isPlaying = ref(false);
+const showPlayer = ref(false);
 const showContentPreview = ref(false);
 const previewImageFailed = ref(false);
 
@@ -181,7 +183,7 @@ async function playMagnet(magnetLink: string | undefined) {
   isPlaying.value = true;
   try {
     const copiedToClipboard = await copyMagnetToClipboard(magnetLink, false);
-    await invoke("play_magnet_link", { magnetLink });
+    showPlayer.value = true;
     emit(
       'showNotification',
       copiedToClipboard
@@ -195,6 +197,14 @@ async function playMagnet(magnetLink: string | undefined) {
   } finally {
     isPlaying.value = false;
   }
+}
+
+function closePlayer() {
+  showPlayer.value = false;
+}
+
+function handlePlayerNotification(message: string, type?: 'success' | 'error') {
+  emit('showNotification', message, type);
 }
 
 </script>
@@ -375,6 +385,14 @@ async function playMagnet(magnetLink: string | undefined) {
         </div>
       </div>
     </div>
+
+    <MagnetPlayerModal
+      v-if="showPlayer && magnetLink"
+      :title="title"
+      :magnet-link="magnetLink"
+      @close="closePlayer"
+      @show-notification="handlePlayerNotification"
+    />
   </div>
 </template>
 

@@ -73,6 +73,25 @@ export interface MessageSchema {
       player: {
         title: string
         close: string
+        files: string
+        stats: {
+          progress: string
+          speed: string
+          peers: string
+        }
+        status: {
+          loadingEngine: string
+          connecting: string
+          loaded: string
+          preparing: string
+          playing: string
+          renderFailed: string
+          engineError: string
+          startFailed: string
+          localEngineHint: string
+          noPlayableFile: string
+          noFiles: string
+        }
       }
       messages: {
         downloadStarted: string

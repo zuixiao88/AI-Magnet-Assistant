@@ -89,6 +89,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Bundle rqbit player engine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          $release = Invoke-RestMethod -Headers @{ "User-Agent" = "AI-Magnet-Assistant-CI"; "Authorization" = "Bearer $env:GH_TOKEN" } -Uri "https://api.github.com/repos/ikatson/rqbit/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -eq "rqbit.exe" } | Select-Object -First 1
+          if (-not $asset) {
+            $asset = $release.assets |
+              Where-Object { $_.name -match "(x86_64|amd64|x64).*(windows|pc-windows|msvc)|(windows|pc-windows|msvc).*(x86_64|amd64|x64)" } |
+              Where-Object { $_.name -notmatch "(desktop|installer|setup|msi)" } |
+              Select-Object -First 1
+          }
+          if (-not $asset) {
+            throw "No rqbit Windows x64 release asset found"
+          }
+          $download = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $download
+          $extractDir = Join-Path $env:RUNNER_TEMP "rqbit"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          if ($asset.name.EndsWith(".zip")) {
+            Expand-Archive -Path $download -DestinationPath $extractDir -Force
+            $rqbit = Get-ChildItem -Path $extractDir -Recurse -Filter "rqbit.exe" | Select-Object -First 1
+          } else {
+            $rqbit = Get-Item $download
+          }
+          if (-not $rqbit) {
+            throw "Downloaded rqbit asset did not contain rqbit.exe"
+          }
+          Copy-Item $rqbit.FullName src-tauri/binaries/rqbit-x86_64-pc-windows-msvc.exe -Force
+
       - name: Build Tauri app
         env:
           CI: true

@@ -8,7 +8,7 @@
         "copyMagnetLink": "复制磁力链接",
         "copied": "已复制！",
         "quickDownload": "快速下载",
-        "playMagnet": "调用本地播放器",
+        "playMagnet": "内置磁力播放",
         "opening": "打开中...",
         "previewContent": "预览磁力内容"
       },
@@ -38,15 +38,34 @@
         "noFiles": "暂无文件列表，可复制磁力链接到下载程序查看详情。"
       },
       "player": {
-        "title": "本地磁力播放器",
-        "close": "关闭播放器"
+        "title": "内置磁力播放器",
+        "close": "关闭播放器",
+        "files": "文件列表",
+        "stats": {
+          "progress": "进度",
+          "speed": "速度",
+          "peers": "Peers"
+        },
+        "status": {
+          "loadingEngine": "正在加载播放引擎...",
+          "connecting": "正在连接 Peers...",
+          "loaded": "已载入：{name}",
+          "preparing": "正在准备播放...",
+          "playing": "正在播放",
+          "renderFailed": "该文件无法在内置播放器中播放：{error}",
+          "engineError": "播放引擎错误：{error}",
+          "startFailed": "内置播放器启动失败：{error}",
+          "localEngineHint": "内置播放器使用本地 rqbit BT 引擎。首次播放需要等待元数据和 Peers；如提示找不到 rqbit，请将 rqbit.exe 放到程序同目录或设置 RQBIT_PATH。",
+          "noPlayableFile": "未找到浏览器可直接播放的媒体文件，可从右侧文件列表选择其他文件。",
+          "noFiles": "暂无文件列表，正在等待磁力元数据。"
+        }
       },
       "messages": {
         "downloadStarted": "下载启动成功！",
         "downloadFailed": "启动下载失败：{error}",
-        "playStarted": "已复制磁力链接，并调用本地磁力程序打开。",
-        "playStartedCopyFallback": "已调用本地磁力程序打开；自动复制失败但不影响打开。",
-        "playFailed": "调用本地磁力程序失败：{error}",
+        "playStarted": "已复制磁力链接，并打开内置播放器。",
+        "playStartedCopyFallback": "已打开内置播放器；自动复制失败但不影响播放尝试。",
+        "playFailed": "打开内置播放器失败：{error}",
         "copyFailed": "复制失败，请手动选择磁力链接复制。"
       }
     }
