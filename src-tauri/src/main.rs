@@ -675,11 +675,8 @@ async fn open_magnet_link(
     state: tauri::State<'_, app_state::AppState>,
     magnet_link: String,
 ) -> Result<(), String> {
+    let magnet_link = normalize_magnet_link(&magnet_link)?;
     let config = app_state::get_download_config(&state);
-
-    if !magnet_link.starts_with("magnet:?") {
-        return Err("Invalid magnet link.".to_string());
-    }
 
     if let Some(ref app_path) = config.custom_app_path {
         // 检查是否是115浏览器
@@ -702,9 +699,7 @@ async fn play_magnet_link(
     state: tauri::State<'_, app_state::AppState>,
     magnet_link: String,
 ) -> Result<(), String> {
-    if !magnet_link.starts_with("magnet:?") {
-        return Err("Invalid magnet link.".to_string());
-    }
+    let magnet_link = normalize_magnet_link(&magnet_link)?;
 
     let config = ensure_daily_tracker_update(&app_handle, &state).await?;
     let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
@@ -745,20 +740,17 @@ async fn start_builtin_magnet_player(
     state: tauri::State<'_, app_state::AppState>,
     magnet_link: String,
 ) -> Result<BuiltinPlayerSession, String> {
-    if !magnet_link.starts_with("magnet:?") {
-        return Err("Invalid magnet link.".to_string());
-    }
-
+    let magnet_link = normalize_magnet_link(&magnet_link)?;
     let info_hash = extract_magnet_info_hash(&magnet_link)?;
     let config = ensure_daily_tracker_update(&app_handle, &state).await?;
     let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
 
     ensure_rqbit_server(&app_handle).await?;
-    add_magnet_to_rqbit(&enhanced_magnet).await?;
+    let rqbit_id = add_magnet_to_rqbit(&enhanced_magnet).await?;
 
     Ok(BuiltinPlayerSession {
         base_url: rqbit_base_url(),
-        info_hash,
+        info_hash: rqbit_id.unwrap_or(info_hash),
     })
 }
 
@@ -815,6 +807,15 @@ async fn get_builtin_magnet_stats(info_hash: String) -> Result<BuiltinPlayerStat
         peers: find_numeric_field(&value, &["live", "peers", "num_peers", "connected_peers"])
             .map(|value| value.max(0.0) as u64),
     })
+}
+
+#[tauri::command]
+fn open_stream_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://127.0.0.1:3030/torrents/") {
+        return Err("Invalid local stream URL.".to_string());
+    }
+
+    open_url_with_default_app(&url)
 }
 
 async fn ensure_daily_tracker_update(
@@ -936,14 +937,67 @@ fn rqbit_base_url() -> String {
     "http://127.0.0.1:3030".to_string()
 }
 
+fn normalize_magnet_link(raw_link: &str) -> Result<String, String> {
+    let mut candidate = raw_link
+        .trim()
+        .replace("&amp;", "&")
+        .replace("&#38;", "&")
+        .replace("&#x26;", "&")
+        .replace("&#x3D;", "=")
+        .replace("&#61;", "=");
+
+    for _ in 0..3 {
+        if candidate.starts_with("magnet:?") {
+            return Ok(candidate);
+        }
+
+        if let Some(index) = candidate.find("magnet:?") {
+            return Ok(candidate[index..].to_string());
+        }
+
+        let Ok(decoded) = urlencoding::decode(&candidate) else {
+            break;
+        };
+        let decoded = decoded.to_string();
+        if decoded == candidate {
+            break;
+        }
+        candidate = decoded;
+    }
+
+    if candidate.starts_with("magnet:?") {
+        Ok(candidate)
+    } else {
+        Err("无法解析磁力链接：未找到 magnet:? 开头的链接。".to_string())
+    }
+}
+
 fn extract_magnet_info_hash(magnet_link: &str) -> Result<String, String> {
-    let re = Regex::new(r"(?i)(?:xt=urn:btih:|btih:)([a-z0-9]{32,40})")
+    if let Ok(url) = url::Url::parse(magnet_link) {
+        for (key, value) in url.query_pairs() {
+            if key.eq_ignore_ascii_case("xt") {
+                let value = value.to_string();
+                if let Some(hash) = value.strip_prefix("urn:btih:").or_else(|| value.strip_prefix("URN:BTIH:")) {
+                    if is_valid_btih(hash) {
+                        return Ok(hash.to_ascii_uppercase());
+                    }
+                }
+            }
+        }
+    }
+
+    let re = Regex::new(r"(?i)(?:xt=urn:?btih:?|btih[:%3a]+)([a-z0-9]{32,40})")
         .map_err(|e| format!("Failed to compile info hash parser: {e}"))?;
 
     re.captures(magnet_link)
         .and_then(|captures| captures.get(1))
         .map(|capture| capture.as_str().to_ascii_uppercase())
-        .ok_or_else(|| "Magnet link does not contain a BTIH info hash.".to_string())
+        .filter(|hash| is_valid_btih(hash))
+        .ok_or_else(|| "无法解析磁力链接：未找到有效 BTIH。".to_string())
+}
+
+fn is_valid_btih(hash: &str) -> bool {
+    (hash.len() == 32 || hash.len() == 40) && hash.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String> {
@@ -1062,23 +1116,56 @@ fn extract_bundled_rqbit(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
-async fn add_magnet_to_rqbit(magnet_link: &str) -> Result<(), String> {
+async fn add_magnet_to_rqbit(magnet_link: &str) -> Result<Option<String>, String> {
     let response = reqwest::Client::new()
         .post(format!("{}/torrents", rqbit_base_url()))
         .query(&[("overwrite", "false")])
+        .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .body(magnet_link.to_string())
         .timeout(Duration::from_secs(12))
         .send()
         .await
         .map_err(|e| format!("Failed to add magnet to rqbit: {e}"))?;
 
-    if response.status().is_success() || response.status().as_u16() == 409 {
-        return Ok(());
-    }
-
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
+    if status.is_success() || status.as_u16() == 409 {
+        return Ok(extract_rqbit_torrent_id(&body));
+    }
+
     Err(format!("rqbit rejected the magnet link: HTTP {status} {body}"))
+}
+
+fn extract_rqbit_torrent_id(body: &str) -> Option<String> {
+    if body.trim().is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        return find_json_id_field(&value, &["id", "torrent_id", "info_hash", "hash"]);
+    }
+
+    None
+}
+
+fn find_json_id_field(value: &serde_json::Value, names: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for name in names {
+                if let Some(value) = map.get(*name) {
+                    if let Some(text) = value.as_str().filter(|text| !text.trim().is_empty()) {
+                        return Some(text.to_string());
+                    }
+                    if let Some(number) = value.as_u64() {
+                        return Some(number.to_string());
+                    }
+                }
+            }
+            map.values().find_map(|child| find_json_id_field(child, names))
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(|child| find_json_id_field(child, names)),
+        _ => None,
+    }
 }
 
 fn parse_rqbit_playlist(body: &str, base_url: &str) -> Vec<BuiltinPlayerFile> {
@@ -1189,6 +1276,35 @@ fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
             .arg(magnet_link)
             .spawn()
             .map_err(|e| format!("Failed to open magnet link with the system default app: {e}"))?;
+        Ok(())
+    }
+}
+
+fn open_url_with_default_app(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|e| format!("Failed to open stream URL with the system default app: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open stream URL with the system default app: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open stream URL with the system default app: {e}"))?;
         Ok(())
     }
 }
@@ -1560,6 +1676,7 @@ fn main() {
             start_builtin_magnet_player,
             get_builtin_magnet_playlist,
             get_builtin_magnet_stats,
+            open_stream_url,
             browse_for_file,
             // 国际化命令
             i18n::get_system_locale,

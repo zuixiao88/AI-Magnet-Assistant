@@ -41,6 +41,7 @@
         "title": "Built-in Magnet Player",
         "close": "Close player",
         "files": "Files",
+        "openStream": "Open stream",
         "stats": {
           "progress": "Progress",
           "speed": "Speed",
@@ -56,6 +57,9 @@
           "engineError": "Player engine error: {error}",
           "startFailed": "Failed to start built-in player: {error}",
           "localEngineHint": "The built-in player uses the local rqbit BT engine. First playback may wait for metadata and peers; if rqbit is missing, place rqbit.exe next to the app or set RQBIT_PATH.",
+          "unsupportedFormat": "The system WebView does not support this file format or codec. Use Open stream to play it in the system player.",
+          "noNativePlayableFile": "Files were resolved, but no MP4/WebM/audio file is directly playable in WebView. Select a file and use Open stream.",
+          "openStreamFailed": "Failed to open stream: {error}",
           "noPlayableFile": "No browser-playable media file was found. Select another file from the list if available.",
           "noFiles": "No file list is available yet. Waiting for magnet metadata."
         }

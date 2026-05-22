@@ -74,6 +74,7 @@ export interface MessageSchema {
         title: string
         close: string
         files: string
+        openStream: string
         stats: {
           progress: string
           speed: string
@@ -89,6 +90,9 @@ export interface MessageSchema {
           engineError: string
           startFailed: string
           localEngineHint: string
+          unsupportedFormat: string
+          noNativePlayableFile: string
+          openStreamFailed: string
           noPlayableFile: string
           noFiles: string
         }

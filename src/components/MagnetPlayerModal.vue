@@ -44,9 +44,14 @@ let session: PlayerSession | null = null;
 let playlistTimer: number | null = null;
 let statsTimer: number | null = null;
 
-const playableFiles = computed(() =>
-  files.value.filter(file => /\.(mp4|webm|mkv|m4v|mov|avi|mp3|ogg|wav|flac|aac|m4a)$/i.test(file.name))
-);
+const playableFiles = computed(() => files.value.filter(isNativePlayableFile));
+const selectedFile = computed(() => files.value.find(file => file.url === selectedFileUrl.value || file.name === selectedFileName.value));
+const canRenderSelected = computed(() => !!selectedFile.value && isNativePlayableFile(selectedFile.value));
+
+function isNativePlayableFile(file: PlayerFile) {
+  const lower = file.name.toLowerCase();
+  return /\.(mp4|m4v|mov|webm|mp3|ogg|wav|aac|m4a)$/i.test(lower);
+}
 
 function formatBytes(bytes?: number | null) {
   if (!bytes || bytes < 0) return '0 B';
@@ -56,6 +61,16 @@ function formatBytes(bytes?: number | null) {
 }
 
 function renderFile(file: PlayerFile) {
+  if (!isNativePlayableFile(file)) {
+    hasError.value = false;
+    selectedFileName.value = file.name;
+    selectedFileUrl.value = file.url;
+    selectedMediaType.value = file.media_type === 'audio' ? 'audio' : 'video';
+    status.value = t('components.resultCard.player.status.unsupportedFormat');
+    return;
+  }
+
+  hasError.value = false;
   selectedFileName.value = file.name;
   selectedFileUrl.value = file.url;
   selectedMediaType.value = file.media_type === 'audio' ? 'audio' : 'video';
@@ -71,6 +86,17 @@ function handlePlaybackError(event: Event) {
   const message = target.error?.message || target.error?.code || 'unsupported media stream';
   hasError.value = true;
   status.value = t('components.resultCard.player.status.renderFailed', { error: String(message) });
+}
+
+async function openSelectedStream() {
+  if (!selectedFileUrl.value) return;
+
+  try {
+    await invoke('open_stream_url', { url: selectedFileUrl.value });
+  } catch (error) {
+    logger.error('Failed to open stream URL:', error);
+    emit('showNotification', t('components.resultCard.player.status.openStreamFailed', { error: String(error) }), 'error');
+  }
 }
 
 async function refreshPlaylist() {
@@ -90,6 +116,11 @@ async function refreshPlaylist() {
       const firstPlayable = playableFiles.value[0];
       if (!selectedFileName.value && firstPlayable) {
         renderFile(firstPlayable);
+      } else if (!selectedFileName.value && nextFiles.length > 0) {
+        selectedFileName.value = nextFiles[0].name;
+        selectedFileUrl.value = nextFiles[0].url;
+        selectedMediaType.value = nextFiles[0].media_type === 'audio' ? 'audio' : 'video';
+        status.value = t('components.resultCard.player.status.noNativePlayableFile');
       }
     }
   } catch (error) {
@@ -176,7 +207,7 @@ onBeforeUnmount(() => {
         <div class="player-main">
           <div class="player-stage" :class="{ empty: !selectedFileName, error: hasError }">
             <video
-              v-if="selectedFileUrl && selectedMediaType === 'video'"
+              v-if="selectedFileUrl && canRenderSelected && selectedMediaType === 'video'"
               :key="selectedFileUrl"
               :src="selectedFileUrl"
               controls
@@ -186,7 +217,7 @@ onBeforeUnmount(() => {
               @error="handlePlaybackError"
             />
             <audio
-              v-else-if="selectedFileUrl && selectedMediaType === 'audio'"
+              v-else-if="selectedFileUrl && canRenderSelected && selectedMediaType === 'audio'"
               :key="selectedFileUrl"
               :src="selectedFileUrl"
               controls
@@ -198,6 +229,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="player-status">
             <span>{{ status }}</span>
+            <button v-if="selectedFileUrl" class="stream-open-btn" @click="openSelectedStream">
+              {{ $t('components.resultCard.player.openStream') }}
+            </button>
             <small v-if="warning">{{ warning }}</small>
           </div>
         </div>
@@ -215,9 +249,8 @@ onBeforeUnmount(() => {
               v-for="file in files"
               :key="file.name"
               class="player-file"
-              :class="{ active: selectedFileName === file.name, playable: playableFiles.includes(file) }"
+              :class="{ active: selectedFileName === file.name, playable: isNativePlayableFile(file) }"
               @click="renderFile(file)"
-              :disabled="!playableFiles.includes(file)"
               :title="file.name"
             >
               <span>{{ file.name }}</span>
@@ -340,14 +373,31 @@ onBeforeUnmount(() => {
 
 .player-status {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px;
+  align-items: center;
   padding: 10px 12px;
   border-top: 1px solid #172033;
   color: #cbd5e1;
   font-size: 12px;
 }
 
+.stream-open-btn {
+  padding: 6px 10px;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  background: #1d4ed8;
+  color: #eff6ff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stream-open-btn:hover {
+  background: #2563eb;
+}
+
 .player-status small {
+  grid-column: 1 / -1;
   color: #facc15;
   line-height: 1.4;
 }
@@ -426,11 +476,6 @@ onBeforeUnmount(() => {
 .player-file.active {
   border-color: #3b82f6;
   background: #16243a;
-}
-
-.player-file:disabled {
-  color: #64748b;
-  cursor: not-allowed;
 }
 
 .player-file span {

@@ -41,6 +41,7 @@
         "title": "内置磁力播放器",
         "close": "关闭播放器",
         "files": "文件列表",
+        "openStream": "打开流地址",
         "stats": {
           "progress": "进度",
           "speed": "速度",
@@ -56,6 +57,9 @@
           "engineError": "播放引擎错误：{error}",
           "startFailed": "内置播放器启动失败：{error}",
           "localEngineHint": "内置播放器使用本地 rqbit BT 引擎。首次播放需要等待元数据和 Peers；如提示找不到 rqbit，请将 rqbit.exe 放到程序同目录或设置 RQBIT_PATH。",
+          "unsupportedFormat": "当前系统 WebView 不支持该文件格式或编码，可点击“打开流地址”交给系统播放器播放。",
+          "noNativePlayableFile": "已解析到文件，但没有 WebView 可直接播放的 MP4/WebM/音频文件。可选择文件后点击“打开流地址”。",
+          "openStreamFailed": "打开流地址失败：{error}",
           "noPlayableFile": "未找到浏览器可直接播放的媒体文件，可从右侧文件列表选择其他文件。",
           "noFiles": "暂无文件列表，正在等待磁力元数据。"
         }
