@@ -983,6 +983,14 @@ fn pick_rqbit_port() -> u16 {
         .unwrap_or(3030)
 }
 
+fn pick_rqbit_peer_port() -> u16 {
+    TcpListener::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+        .unwrap_or(4240)
+}
+
 fn write_rqbit_trackers_file(
     app_handle: &tauri::AppHandle,
     trackers: &[String],
@@ -1139,7 +1147,9 @@ async fn ensure_rqbit_server(
     let port = pick_rqbit_port();
     let base_url = set_rqbit_base_url(port);
     let listen_addr = format!("127.0.0.1:{port}");
+    let peer_port = pick_rqbit_peer_port().to_string();
     let log_path = rqbit_log_path(app_handle)?;
+    clear_rqbit_log(&log_path)?;
     let stdout_log = open_rqbit_log(&log_path)?;
     let stderr_log = stdout_log
         .try_clone()
@@ -1148,6 +1158,8 @@ async fn ensure_rqbit_server(
     let mut command = Command::new(&executable);
     command
         .env("RQBIT_HTTP_API_LISTEN_ADDR", &listen_addr)
+        .env("RQBIT_LISTEN_PORT", &peer_port)
+        .env("RQBIT_ANNOUNCE_PORT", &peer_port)
         .env("RQBIT_SESSION_PERSISTENCE_DISABLE", "1")
         .env("RQBIT_UPNP_PORT_FORWARD_DISABLE", "1")
         .env("RQBIT_DHT_PERSISTENCE_DISABLE", "1");
@@ -1159,6 +1171,10 @@ async fn ensure_rqbit_server(
         .args([
             "--disable-upnp-port-forward",
             "--disable-dht-persistence",
+            "--listen-port",
+            &peer_port,
+            "--announce-port",
+            &peer_port,
             "server",
             "start",
             "--disable-persistence",
@@ -1198,6 +1214,17 @@ fn rqbit_log_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|dir| dir.join("rqbit-engine.log"))
         .map_err(|e| format!("Failed to resolve app data directory: {e}"))
+}
+
+fn clear_rqbit_log(path: &PathBuf) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create rqbit log directory: {e}"))?;
+    }
+
+    File::create(path)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to clear rqbit log file: {e}"))
 }
 
 async fn rqbit_server_ready(base_url: &str) -> bool {
