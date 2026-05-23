@@ -754,7 +754,7 @@ async fn start_builtin_magnet_player(
     let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
 
     ensure_rqbit_server(&app_handle).await?;
-    let rqbit_id = add_magnet_to_rqbit(&enhanced_magnet).await?;
+    let rqbit_id = add_magnet_to_rqbit(&app_handle, &enhanced_magnet).await?;
 
     Ok(BuiltinPlayerSession {
         base_url: rqbit_base_url(),
@@ -1095,11 +1095,7 @@ async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String
     let port = pick_rqbit_port();
     let base_url = set_rqbit_base_url(port);
     let listen_addr = format!("127.0.0.1:{port}");
-    let log_path = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?
-        .join("rqbit-engine.log");
+    let log_path = rqbit_log_path(app_handle)?;
     let stdout_log = open_rqbit_log(&log_path)?;
     let stderr_log = stdout_log
         .try_clone()
@@ -1132,6 +1128,14 @@ async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String
         "rqbit 播放引擎已启动但未在 {base_url} 响应。日志：{}",
         read_log_tail(&log_path, 2000)
     ))
+}
+
+fn rqbit_log_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("rqbit-engine.log"))
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))
 }
 
 async fn rqbit_server_ready(base_url: &str) -> bool {
@@ -1297,24 +1301,56 @@ fn extract_bundled_rqbit(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
-async fn add_magnet_to_rqbit(magnet_link: &str) -> Result<Option<String>, String> {
-    let response = reqwest::Client::new()
-        .post(format!("{}/torrents", rqbit_base_url()))
-        .query(&[("overwrite", "false")])
-        .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(magnet_link.to_string())
-        .timeout(Duration::from_secs(12))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to add magnet to rqbit: {e}"))?;
+async fn add_magnet_to_rqbit(
+    app_handle: &tauri::AppHandle,
+    magnet_link: &str,
+) -> Result<Option<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create rqbit HTTP client: {e}"))?;
+    let log_path = rqbit_log_path(app_handle).ok();
+    let mut last_error = String::new();
 
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if status.is_success() || status.as_u16() == 409 {
-        return Ok(extract_rqbit_torrent_id(&body));
+    for attempt in 1..=5 {
+        let base_url = rqbit_base_url();
+        let response = client
+            .post(format!("{base_url}/torrents"))
+            .query(&[("overwrite", "false")])
+            .body(magnet_link.to_string())
+            .send()
+            .await;
+
+        match response {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if status.is_success() || status.as_u16() == 409 {
+                    return Ok(extract_rqbit_torrent_id(&body));
+                }
+
+                return Err(format!("rqbit rejected the magnet link: HTTP {status} {body}"));
+            }
+            Err(error) => {
+                last_error = format!("attempt {attempt}: {error}");
+                if attempt < 5 {
+                    if !rqbit_server_ready(&base_url).await {
+                        ensure_rqbit_server(app_handle).await?;
+                    }
+                    tokio::time::sleep(Duration::from_millis(700 * attempt)).await;
+                }
+            }
+        }
     }
 
-    Err(format!("rqbit rejected the magnet link: HTTP {status} {body}"))
+    let log_tail = log_path
+        .as_ref()
+        .map(|path| read_log_tail(path, 4000))
+        .unwrap_or_else(|| "无可用日志".to_string());
+
+    Err(format!(
+        "Failed to add magnet to rqbit after retries: {last_error}. rqbit 日志：{log_tail}"
+    ))
 }
 
 fn extract_rqbit_torrent_id(body: &str) -> Option<String> {
