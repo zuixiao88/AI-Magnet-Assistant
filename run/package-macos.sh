@@ -26,6 +26,13 @@ if [[ ! -d "$APP_DIR" ]]; then
   exit 1
 fi
 
+echo "Cleaning extended attributes from app bundle"
+xattr -cr "$APP_DIR" || true
+
+echo "Applying ad-hoc code signature"
+codesign --force --deep --sign - "$APP_DIR"
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 
