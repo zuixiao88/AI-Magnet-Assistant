@@ -105,6 +105,7 @@ async function refreshPlaylist() {
   try {
     const nextFiles = await invoke<PlayerFile[]>('get_builtin_magnet_playlist', {
       infoHash: session.info_hash,
+      baseUrl: session.base_url,
     });
 
     files.value = nextFiles;
@@ -143,6 +144,7 @@ function startTimers() {
     try {
       const stats = await invoke<{ progress?: number; download_speed?: number; peers?: number }>('get_builtin_magnet_stats', {
         infoHash: session.info_hash,
+        baseUrl: session.base_url,
       });
 
       progress.value = `${((stats.progress || 0) * 100).toFixed(1)}%`;

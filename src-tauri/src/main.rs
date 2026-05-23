@@ -11,10 +11,18 @@ mod i18n;
 use tauri::Manager;
 use regex::Regex;
 use searcher::SearchCore;
+use once_cell::sync::Lazy;
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::Duration;
+
+static RQBIT_BASE_URL: Lazy<Mutex<String>> =
+    Lazy::new(|| Mutex::new("http://127.0.0.1:3030".to_string()));
 
 // ============ 辅助函数 ============
 
@@ -755,8 +763,12 @@ async fn start_builtin_magnet_player(
 }
 
 #[tauri::command]
-async fn get_builtin_magnet_playlist(info_hash: String) -> Result<Vec<BuiltinPlayerFile>, String> {
-    let playlist_url = format!("{}/torrents/{}/playlist", rqbit_base_url(), info_hash);
+async fn get_builtin_magnet_playlist(
+    info_hash: String,
+    base_url: Option<String>,
+) -> Result<Vec<BuiltinPlayerFile>, String> {
+    let base_url = sanitize_local_rqbit_base_url(base_url.as_deref())?;
+    let playlist_url = format!("{}/torrents/{}/playlist", base_url, info_hash);
     let response = reqwest::Client::new()
         .get(&playlist_url)
         .timeout(Duration::from_secs(8))
@@ -773,12 +785,16 @@ async fn get_builtin_magnet_playlist(info_hash: String) -> Result<Vec<BuiltinPla
         .await
         .map_err(|e| format!("Failed to read rqbit playlist: {e}"))?;
 
-    Ok(parse_rqbit_playlist(&body, &rqbit_base_url()))
+    Ok(parse_rqbit_playlist(&body, &base_url))
 }
 
 #[tauri::command]
-async fn get_builtin_magnet_stats(info_hash: String) -> Result<BuiltinPlayerStats, String> {
-    let stats_url = format!("{}/torrents/{}/stats/v1", rqbit_base_url(), info_hash);
+async fn get_builtin_magnet_stats(
+    info_hash: String,
+    base_url: Option<String>,
+) -> Result<BuiltinPlayerStats, String> {
+    let base_url = sanitize_local_rqbit_base_url(base_url.as_deref())?;
+    let stats_url = format!("{}/torrents/{}/stats/v1", base_url, info_hash);
     let response = reqwest::Client::new()
         .get(&stats_url)
         .timeout(Duration::from_secs(5))
@@ -811,7 +827,7 @@ async fn get_builtin_magnet_stats(info_hash: String) -> Result<BuiltinPlayerStat
 
 #[tauri::command]
 fn open_stream_url(url: String) -> Result<(), String> {
-    if !url.starts_with("http://127.0.0.1:3030/torrents/") {
+    if !is_local_rqbit_stream_url(&url) {
         return Err("Invalid local stream URL.".to_string());
     }
 
@@ -934,7 +950,65 @@ fn append_trackers_to_magnet(magnet_link: &str, trackers: &[String]) -> String {
 }
 
 fn rqbit_base_url() -> String {
-    "http://127.0.0.1:3030".to_string()
+    RQBIT_BASE_URL
+        .lock()
+        .map(|url| url.clone())
+        .unwrap_or_else(|_| "http://127.0.0.1:3030".to_string())
+}
+
+fn set_rqbit_base_url(port: u16) -> String {
+    let base_url = format!("http://127.0.0.1:{port}");
+    if let Ok(mut url) = RQBIT_BASE_URL.lock() {
+        *url = base_url.clone();
+    }
+    base_url
+}
+
+fn pick_rqbit_port() -> u16 {
+    if std::net::TcpStream::connect(("127.0.0.1", 3030)).is_err() {
+        return 3030;
+    }
+
+    TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+        .unwrap_or(3030)
+}
+
+fn sanitize_local_rqbit_base_url(base_url: Option<&str>) -> Result<String, String> {
+    let candidate = base_url
+        .filter(|url| !url.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or_else(|| "");
+
+    if candidate.is_empty() {
+        return Ok(rqbit_base_url());
+    }
+
+    let parsed = url::Url::parse(candidate).map_err(|_| "Invalid local rqbit base URL.".to_string())?;
+    if parsed.scheme() != "http" || parsed.host_str() != Some("127.0.0.1") {
+        return Err("Invalid local rqbit base URL.".to_string());
+    }
+
+    parsed
+        .port()
+        .filter(|port| *port > 0)
+        .ok_or_else(|| "Invalid local rqbit base URL.".to_string())?;
+
+    Ok(candidate.trim_end_matches('/').to_string())
+}
+
+fn is_local_rqbit_stream_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+
+    parsed.scheme() == "http"
+        && parsed.host_str() == Some("127.0.0.1")
+        && parsed.port().is_some()
+        && parsed.path().starts_with("/torrents/")
+        && parsed.path().contains("/stream/")
 }
 
 fn normalize_magnet_link(raw_link: &str) -> Result<String, String> {
@@ -1001,7 +1075,7 @@ fn is_valid_btih(hash: &str) -> bool {
 }
 
 async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String> {
-    if rqbit_server_ready().await {
+    if rqbit_server_ready(&rqbit_base_url()).await {
         return Ok(());
     }
 
@@ -1018,33 +1092,107 @@ async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String
     std::fs::create_dir_all(&download_dir)
         .map_err(|e| format!("Failed to create rqbit download directory: {e}"))?;
 
-    Command::new(executable)
+    let port = pick_rqbit_port();
+    let base_url = set_rqbit_base_url(port);
+    let listen_addr = format!("127.0.0.1:{port}");
+    let log_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?
+        .join("rqbit-engine.log");
+    let stdout_log = open_rqbit_log(&log_path)?;
+    let stderr_log = stdout_log
+        .try_clone()
+        .map_err(|e| format!("Failed to prepare rqbit log file: {e}"))?;
+
+    let mut child = Command::new(&executable)
+        .env("RQBIT_HTTP_API_LISTEN_ADDR", &listen_addr)
         .args(["server", "start"])
-        .arg(download_dir)
+        .arg(&download_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
         .spawn()
-        .map_err(|e| format!("Failed to start rqbit player engine: {e}"))?;
+        .map_err(|e| format!("Failed to start rqbit player engine '{}': {e}", executable.display()))?;
 
     for _ in 0..30 {
-        if rqbit_server_ready().await {
+        if rqbit_server_ready(&base_url).await {
             return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!(
+                "rqbit 播放引擎启动后立即退出（状态：{status}）。日志：{}",
+                read_log_tail(&log_path, 2000)
+            ));
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 
-    Err("rqbit 播放引擎已启动但未在 127.0.0.1:3030 响应。".to_string())
+    Err(format!(
+        "rqbit 播放引擎已启动但未在 {base_url} 响应。日志：{}",
+        read_log_tail(&log_path, 2000)
+    ))
 }
 
-async fn rqbit_server_ready() -> bool {
-    reqwest::Client::new()
-        .get(rqbit_base_url())
+async fn rqbit_server_ready(base_url: &str) -> bool {
+    let Ok(response) = reqwest::Client::new()
+        .get(base_url)
         .timeout(Duration::from_secs(2))
         .send()
-        .await
-        .map(|response| response.status().is_success())
+        .await else {
+            return false;
+        };
+
+    if !response.status().is_success() {
+        return false;
+    }
+
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
+
+    value
+        .get("server")
+        .and_then(|server| server.as_str())
+        .map(|server| server.eq_ignore_ascii_case("rqbit"))
         .unwrap_or(false)
+}
+
+fn open_rqbit_log(path: &PathBuf) -> Result<File, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create rqbit log directory: {e}"))?;
+    }
+
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("Failed to open rqbit log file: {e}"))
+}
+
+fn read_log_tail(path: &PathBuf, max_bytes: u64) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return "无可用日志".to_string();
+    };
+
+    let len = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let start = len.saturating_sub(max_bytes);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return "无法读取日志".to_string();
+    }
+
+    let mut buffer = String::new();
+    if file.read_to_string(&mut buffer).is_err() {
+        return "无法解析日志".to_string();
+    }
+
+    let trimmed = buffer.trim();
+    if trimmed.is_empty() {
+        "日志为空".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn find_rqbit_executable(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
