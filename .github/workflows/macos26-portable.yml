@@ -1,0 +1,92 @@
+name: macOS 26 Portable Build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: macos26-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build macOS 26 portable app
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          shared-key: ai-magnet-assistant-macos26
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Bundle rqbit player engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p src-tauri/binaries
+          asset_url=$(
+            curl -fsSL \
+              -H "User-Agent: AI-Magnet-Assistant-CI" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              https://api.github.com/repos/ikatson/rqbit/releases/latest |
+            node -e "
+              let data = '';
+              process.stdin.on('data', chunk => data += chunk);
+              process.stdin.on('end', () => {
+                const release = JSON.parse(data);
+                const asset = release.assets.find(item => item.name === 'rqbit-osx-universal');
+                if (!asset) {
+                  console.error('No rqbit-osx-universal release asset found');
+                  process.exit(1);
+                }
+                console.log(asset.browser_download_url);
+              });
+            "
+          )
+          curl -fL "$asset_url" -o src-tauri/binaries/rqbit-universal-apple-darwin
+          chmod +x src-tauri/binaries/rqbit-universal-apple-darwin
+
+      - name: Build Tauri app
+        env:
+          CI: true
+          TAURI_SKIP_SIGNING: "1"
+          RUST_BACKTRACE: "1"
+        run: npm run tauri build -- --bundles app
+
+      - name: Create portable app archive
+        run: |
+          SKIP_BUILD=1 bash run/package-macos.sh
+
+      - name: Upload portable app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-magnet-assistant-macos26-portable
+          if-no-files-found: error
+          retention-days: 7
+          path: src-tauri/target/release/bundle/portable/*.app.zip
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-macos26
+          path: |
+            target/**/bundle/**/bundle.log
+            src-tauri/target/**/bundle/**/bundle.log

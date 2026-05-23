@@ -1111,7 +1111,40 @@ fn extract_bundled_rqbit(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     Some(engine_path)
 }
 
+#[cfg(target_os = "macos")]
+fn extract_bundled_rqbit(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    const RQBIT_BYTES: &[u8] = include_bytes!("../binaries/rqbit-universal-apple-darwin");
+
+    let engine_dir = app_handle
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("player-engine");
+    let engine_path = engine_dir.join("rqbit");
+
+    std::fs::create_dir_all(&engine_dir).ok()?;
+
+    let should_write = std::fs::metadata(&engine_path)
+        .map(|metadata| metadata.len() != RQBIT_BYTES.len() as u64)
+        .unwrap_or(true);
+
+    if should_write {
+        std::fs::write(&engine_path, RQBIT_BYTES).ok()?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&engine_path).ok()?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&engine_path, permissions).ok()?;
+    }
+
+    Some(engine_path)
+}
+
 #[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 fn extract_bundled_rqbit(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
