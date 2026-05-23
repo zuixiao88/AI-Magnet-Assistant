@@ -23,6 +23,7 @@ use std::time::Duration;
 
 static RQBIT_BASE_URL: Lazy<Mutex<String>> =
     Lazy::new(|| Mutex::new("http://127.0.0.1:3030".to_string()));
+static RQBIT_STARTED_BY_APP: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
 // ============ 辅助函数 ============
 
@@ -750,15 +751,23 @@ async fn start_builtin_magnet_player(
 ) -> Result<BuiltinPlayerSession, String> {
     let magnet_link = normalize_magnet_link(&magnet_link)?;
     let info_hash = extract_magnet_info_hash(&magnet_link)?;
-    let config = ensure_daily_tracker_update(&app_handle, &state).await?;
+    let config = app_state::get_download_config(&state);
     let enhanced_magnet = append_trackers_to_magnet(&magnet_link, &config.tracker_servers);
 
-    ensure_rqbit_server(&app_handle).await?;
-    let rqbit_id = add_magnet_to_rqbit(&app_handle, &enhanced_magnet).await?;
+    let tracker_file = write_rqbit_trackers_file(&app_handle, &config.tracker_servers).ok();
+    ensure_rqbit_server(&app_handle, tracker_file.as_ref()).await?;
+    let base_url = rqbit_base_url();
+    let add_app_handle = app_handle.clone();
+    let add_magnet = enhanced_magnet.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = add_magnet_to_rqbit(&add_app_handle, &add_magnet).await {
+            eprintln!("Failed to add magnet to rqbit in background: {error}");
+        }
+    });
 
     Ok(BuiltinPlayerSession {
-        base_url: rqbit_base_url(),
-        info_hash: rqbit_id.unwrap_or(info_hash),
+        base_url,
+        info_hash,
     })
 }
 
@@ -818,9 +827,11 @@ async fn get_builtin_magnet_stats(
     Ok(BuiltinPlayerStats {
         progress: find_numeric_field(&value, &["progress", "finished_percentage", "downloaded_percent"])
             .map(normalize_progress),
-        download_speed: find_numeric_field(&value, &["download_speed", "download_speed_bytes", "downloaded_and_checked_bytes_per_second"])
+        download_speed: find_numeric_field(&value, &["download_speed", "download_speed_bytes", "downloaded_and_checked_bytes_per_second", "mbps"])
             .map(|value| value.max(0.0) as u64),
-        peers: find_numeric_field(&value, &["live", "peers", "num_peers", "connected_peers"])
+        peers: find_numeric_field(&value, &["peers", "num_peers", "connected_peers"])
+            .or_else(|| find_nested_numeric_field(&value, &["live", "snapshot", "peer_stats", "live"]))
+            .or_else(|| find_nested_numeric_field(&value, &["live", "snapshot", "peer_stats", "seen"]))
             .map(|value| value.max(0.0) as u64),
     })
 }
@@ -965,15 +976,40 @@ fn set_rqbit_base_url(port: u16) -> String {
 }
 
 fn pick_rqbit_port() -> u16 {
-    if std::net::TcpStream::connect(("127.0.0.1", 3030)).is_err() {
-        return 3030;
-    }
-
     TcpListener::bind("127.0.0.1:0")
         .ok()
         .and_then(|listener| listener.local_addr().ok())
         .map(|addr| addr.port())
         .unwrap_or(3030)
+}
+
+fn write_rqbit_trackers_file(
+    app_handle: &tauri::AppHandle,
+    trackers: &[String],
+) -> Result<PathBuf, String> {
+    let tracker_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?
+        .join("rqbit-trackers.txt");
+
+    if let Some(parent) = tracker_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create rqbit tracker directory: {e}"))?;
+    }
+
+    let mut unique = HashSet::new();
+    let content = trackers
+        .iter()
+        .map(|tracker| tracker.trim())
+        .filter(|tracker| !tracker.is_empty())
+        .filter(|tracker| unique.insert((*tracker).to_string()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    std::fs::write(&tracker_path, content)
+        .map_err(|e| format!("Failed to write rqbit tracker file: {e}"))?;
+    Ok(tracker_path)
 }
 
 fn sanitize_local_rqbit_base_url(base_url: Option<&str>) -> Result<String, String> {
@@ -1074,8 +1110,16 @@ fn is_valid_btih(hash: &str) -> bool {
     (hash.len() == 32 || hash.len() == 40) && hash.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
-async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String> {
-    if rqbit_server_ready(&rqbit_base_url()).await {
+async fn ensure_rqbit_server(
+    app_handle: &tauri::AppHandle,
+    tracker_file: Option<&PathBuf>,
+) -> Result<(), String> {
+    let already_started_by_app = RQBIT_STARTED_BY_APP
+        .lock()
+        .map(|started| *started)
+        .unwrap_or(false);
+
+    if already_started_by_app && rqbit_server_ready(&rqbit_base_url()).await {
         return Ok(());
     }
 
@@ -1101,9 +1145,24 @@ async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String
         .try_clone()
         .map_err(|e| format!("Failed to prepare rqbit log file: {e}"))?;
 
-    let mut child = Command::new(&executable)
+    let mut command = Command::new(&executable);
+    command
         .env("RQBIT_HTTP_API_LISTEN_ADDR", &listen_addr)
-        .args(["server", "start"])
+        .env("RQBIT_SESSION_PERSISTENCE_DISABLE", "1")
+        .env("RQBIT_UPNP_PORT_FORWARD_DISABLE", "1")
+        .env("RQBIT_DHT_PERSISTENCE_DISABLE", "1");
+    if let Some(tracker_file) = tracker_file {
+        command.env("RQBIT_TRACKERS_FILENAME", tracker_file);
+    }
+
+    let mut child = command
+        .args([
+            "--disable-upnp-port-forward",
+            "--disable-dht-persistence",
+            "server",
+            "start",
+            "--disable-persistence",
+        ])
         .arg(&download_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
@@ -1113,6 +1172,9 @@ async fn ensure_rqbit_server(app_handle: &tauri::AppHandle) -> Result<(), String
 
     for _ in 0..30 {
         if rqbit_server_ready(&base_url).await {
+            if let Ok(mut started) = RQBIT_STARTED_BY_APP.lock() {
+                *started = true;
+            }
             return Ok(());
         }
         if let Ok(Some(status)) = child.try_wait() {
@@ -1335,7 +1397,7 @@ async fn add_magnet_to_rqbit(
                 last_error = format!("attempt {attempt}: {error}");
                 if attempt < 5 {
                     if !rqbit_server_ready(&base_url).await {
-                        ensure_rqbit_server(app_handle).await?;
+                        ensure_rqbit_server(app_handle, None).await?;
                     }
                     tokio::time::sleep(Duration::from_millis(700 * attempt)).await;
                 }
@@ -1466,6 +1528,14 @@ fn find_numeric_field(value: &serde_json::Value, names: &[&str]) -> Option<f64> 
         serde_json::Value::Array(items) => items.iter().find_map(|child| find_numeric_field(child, names)),
         _ => None,
     }
+}
+
+fn find_nested_numeric_field(value: &serde_json::Value, path: &[&str]) -> Option<f64> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_f64()
 }
 
 fn open_magnet_with_default_app(magnet_link: &str) -> Result<(), String> {
